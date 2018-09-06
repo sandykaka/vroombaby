@@ -25,7 +25,7 @@ SECRET_KEY = ')1x1+(1p0x*=8_0lfcn8^6!*#6ri-9zavxi14@nyug%!pa5k0m'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-ALLOWED_HOSTS = ['www.vroombaby.com', 'vroombaby.com']
+ALLOWED_HOSTS = ['www.vroombaby.com', 'vroombaby.com', '54.88.228.55']
 # ALLOWED_HOSTS = []
 
 
