@@ -50,6 +50,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'vroombaby.middleware.MyMiddleware',
+
 ]
 
 ROOT_URLCONF = 'website1.urls'
@@ -125,3 +127,5 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # The URL to use when referring to static files (where they will be served from)
 STATIC_URL = '/static/'
+
+X_FRAME_OPTIONS = "ALLOW-FROM ws-na.amazon-adsystem.com"
