@@ -1,4 +1,6 @@
 {% load static %}
+
+<link rel="stylesheet" type="text/css" href="{% static 'vroombaby/style.css' %}">
 <!DOCTYPE html>
 <html lang="en">
 
@@ -258,11 +260,24 @@
       <div class="container">
         <div class="row">
           <div class="col-lg-12 text-center">
-            <h2 class="section-heading text-uppercase">Purchase from Amazon</h2>
-            <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="https://ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=796fd06ba997eddf5fbded4df3381f5d&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
+            <h2 class="section-heading text-uppercase">Purchase from Amazon or Paypal</h2>
+              <form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_top">
+    <input type="hidden" name="cmd" value="_s-xclick">
+    <input type="hidden" name="hosted_button_id" value="J9UCVA6X8NDF6">
+    <table>
+    <tr><td><input type="hidden" name="on0" value="Hindi Marathi Nepali Alphabet Mat">Hindi Marathi Nepali Alphabet Mat</td></tr><tr><td><select name="os0">
+        <option value="price">price $49.99 USD</option>
+    </select> </td></tr>
+    </table>
+    <input type="hidden" name="currency_code" value="USD">
+    <input type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_buynowCC_LG.gif" border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
+    <img alt="" border="0" src="https://www.paypalobjects.com/en_US/i/scr/pixel.gif" width="1" height="1">
+    </form>
+            <br>
+
+            <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="//ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=f8135ac1fcc28eb739d1001b45856996&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
     </iframe>
           </div>
-        </div>
         <div class="row">
           <div class="col-lg-8 mx-auto text-center">
             <p class="large text-muted">            <a target="_blank" onclick="return gtag_report_conversion('https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=0f155fa9ea553a8ddd8b0f2b58f2e144');" href="https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=0f155fa9ea553a8ddd8b0f2b58f2e144">Hindi Marathi Nepali Alphabet Mat - 51 Tiles - EVA Foam Jigsaw Puzzle Floor Play Mat</a><img src="//ir-na.amazon-adsystem.com/e/ir?t=vroombaby-20&l=am2&o=1&a=B07H1N53F3" width="1" height="1" border="0" alt="ka kha ga gha" style="border:none !important; margin:0px !important;" />
@@ -360,9 +375,21 @@
         </ul>
 
                   <img class="img-fluid d-block mx-auto" src="{% static 'vroombaby/images/portfolio/01-full.jpg' %}" alt="">
-                    <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="https://ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=796fd06ba997eddf5fbded4df3381f5d&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
-    </iframe>
+                    <form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_top">
+<input type="hidden" name="cmd" value="_s-xclick">
+<input type="hidden" name="hosted_button_id" value="J9UCVA6X8NDF6">
+<table>
+<tr><td><input type="hidden" name="on0" value="Hindi Marathi Nepali Alphabet Mat">Hindi Marathi Nepali Alphabet Mat</td></tr><tr><td><select name="os0">
+	<option value="price">price $49.99 USD</option>
+</select> </td></tr>
+</table>
+<input type="hidden" name="currency_code" value="USD">
+<input type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_buynowCC_LG.gif" border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
+<img alt="" border="0" src="https://www.paypalobjects.com/en_US/i/scr/pixel.gif" width="1" height="1">
+</form>
 
+                    <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="//ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=f8135ac1fcc28eb739d1001b45856996&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
+    </iframe>
                   <p><a target="_blank" onclick="return gtag_report_conversion('https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d');" href="https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d">Hindi Marathi Nepali Alphabet Mat - 51 Tiles - EVA Foam Jigsaw Puzzle Floor Play Mat</a><img src="//ir-na.amazon-adsystem.com/e/ir?t=vroombaby-20&l=am2&o=1&a=B07H1N53F3" width="1" height="1" border="0" alt="abc puzzle mat" style="border:none !important; margin:0px !important;" /></p>
                   <button class="btn btn-primary" data-dismiss="modal" type="button">
                     <i class="fas fa-times"></i>
@@ -419,9 +446,21 @@
 
         </ul>
                   <img class="img-fluid d-block mx-auto" src="{% static 'vroombaby/images/portfolio/02-full.jpg' %}" alt="">
-                    <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="https://ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=796fd06ba997eddf5fbded4df3381f5d&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
-    </iframe>
-                    <p><a target="_blank" onclick="return gtag_report_conversion('https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d');" href="https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d">Hindi Marathi Nepali Alphabet Mat - 51 Tiles - EVA Foam Jigsaw Puzzle Floor Play Mat</a><img src="//ir-na.amazon-adsystem.com/e/ir?t=vroombaby-20&l=am2&o=1&a=B07H1N53F3" width="1" height="1" border="0" alt="marathi kids toys" style="border:none !important; margin:0px !important;" /></p>
+                    <form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_top">
+<input type="hidden" name="cmd" value="_s-xclick">
+<input type="hidden" name="hosted_button_id" value="J9UCVA6X8NDF6">
+<table>
+<tr><td><input type="hidden" name="on0" value="Hindi Marathi Nepali Alphabet Mat">Hindi Marathi Nepali Alphabet Mat</td></tr><tr><td><select name="os0">
+	<option value="price">price $49.99 USD</option>
+</select> </td></tr>
+</table>
+<input type="hidden" name="currency_code" value="USD">
+<input type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_buynowCC_LG.gif" border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
+<img alt="" border="0" src="https://www.paypalobjects.com/en_US/i/scr/pixel.gif" width="1" height="1">
+</form>
+
+                    <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="//ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=f8135ac1fcc28eb739d1001b45856996&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
+    </iframe>                    <p><a target="_blank" onclick="return gtag_report_conversion('https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d');" href="https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d">Hindi Marathi Nepali Alphabet Mat - 51 Tiles - EVA Foam Jigsaw Puzzle Floor Play Mat</a><img src="//ir-na.amazon-adsystem.com/e/ir?t=vroombaby-20&l=am2&o=1&a=B07H1N53F3" width="1" height="1" border="0" alt="marathi kids toys" style="border:none !important; margin:0px !important;" /></p>
                   <button class="btn btn-primary" data-dismiss="modal" type="button">
                     <i class="fas fa-times"></i>
                     Close</button>
@@ -477,10 +516,21 @@
 
         </ul>
                   <img class="img-fluid d-block mx-auto" src="{% static 'vroombaby/images/portfolio/03-full.jpg' %}" alt="">
-                    <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="https://ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=796fd06ba997eddf5fbded4df3381f5d&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
-    </iframe>
-                    <p><a target="_blank" onclick="return gtag_report_conversion('https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d');" href="https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d">Hindi Marathi Nepali Alphabet Mat - 51 Tiles - EVA Foam Jigsaw Puzzle Floor Play Mat</a><img src="//ir-na.amazon-adsystem.com/e/ir?t=vroombaby-20&l=am2&o=1&a=B07H1N53F3" width="1" height="1" border="0" alt="hindi toys" style="border:none !important; margin:0px !important;" /></p>
-                  <button class="btn btn-primary" data-dismiss="modal" type="button">
+                    <form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_top">
+<input type="hidden" name="cmd" value="_s-xclick">
+<input type="hidden" name="hosted_button_id" value="J9UCVA6X8NDF6">
+<table>
+<tr><td><input type="hidden" name="on0" value="Hindi Marathi Nepali Alphabet Mat">Hindi Marathi Nepali Alphabet Mat</td></tr><tr><td><select name="os0">
+	<option value="price">price $49.99 USD</option>
+</select> </td></tr>
+</table>
+<input type="hidden" name="currency_code" value="USD">
+<input type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_buynowCC_LG.gif" border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
+<img alt="" border="0" src="https://www.paypalobjects.com/en_US/i/scr/pixel.gif" width="1" height="1">
+</form>
+
+                    <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="//ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=f8135ac1fcc28eb739d1001b45856996&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
+    </iframe>                  <button class="btn btn-primary" data-dismiss="modal" type="button">
                     <i class="fas fa-times"></i>
                     Close</button>
                 </div>
@@ -535,9 +585,22 @@
 
         </ul>
                   <img class="img-fluid d-block mx-auto" src="{% static 'vroombaby/images/portfolio/04-full.jpg' %}" alt="">
-                    <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="https://ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=796fd06ba997eddf5fbded4df3381f5d&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
-    </iframe>
-                    <p><a target="_blank" onclick="return gtag_report_conversion('https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d');" href="https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d">Hindi Marathi Nepali Alphabet Mat - 51 Tiles - EVA Foam Jigsaw Puzzle Floor Play Mat</a><img src="//ir-na.amazon-adsystem.com/e/ir?t=vroombaby-20&l=am2&o=1&a=B07H1N53F3" width="1" height="1" border="0" alt="marathi toys" style="border:none !important; margin:0px !important;" /></p>
+                    <form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_top">
+<input type="hidden" name="cmd" value="_s-xclick">
+<input type="hidden" name="hosted_button_id" value="J9UCVA6X8NDF6">
+<table>
+<tr><td><input type="hidden" name="on0" value="Hindi Marathi Nepali Alphabet Mat">Hindi Marathi Nepali Alphabet Mat</td></tr><tr><td><select name="os0">
+	<option value="price">price $49.99 USD</option>
+</select> </td></tr>
+</table>
+<input type="hidden" name="currency_code" value="USD">
+<input type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_buynowCC_LG.gif" border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
+<img alt="" border="0" src="https://www.paypalobjects.com/en_US/i/scr/pixel.gif" width="1" height="1">
+</form>
+
+
+                    <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="//ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=f8135ac1fcc28eb739d1001b45856996&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
+    </iframe>                    <p><a target="_blank" onclick="return gtag_report_conversion('https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d');" href="https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d">Hindi Marathi Nepali Alphabet Mat - 51 Tiles - EVA Foam Jigsaw Puzzle Floor Play Mat</a><img src="//ir-na.amazon-adsystem.com/e/ir?t=vroombaby-20&l=am2&o=1&a=B07H1N53F3" width="1" height="1" border="0" alt="marathi toys" style="border:none !important; margin:0px !important;" /></p>
                   <button class="btn btn-primary" data-dismiss="modal" type="button">
                     <i class="fas fa-times"></i>
                     Close</button>
@@ -593,9 +656,21 @@
 
         </ul>
                   <img class="img-fluid d-block mx-auto" src="{% static 'vroombaby/images/portfolio/05-full.jpg' %}" alt="">
-                    <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="https://ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=796fd06ba997eddf5fbded4df3381f5d&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
-    </iframe>
-                    <p><a target="_blank" onclick="return gtag_report_conversion('https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d');" href="https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d">Hindi Marathi Nepali Alphabet Mat - 51 Tiles - EVA Foam Jigsaw Puzzle Floor Play Mat</a><img src="//ir-na.amazon-adsystem.com/e/ir?t=vroombaby-20&l=am2&o=1&a=B07H1N53F3" width="1" height="1" border="0" alt="marathi khelni" style="border:none !important; margin:0px !important;" /></p>
+                    <form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_top">
+<input type="hidden" name="cmd" value="_s-xclick">
+<input type="hidden" name="hosted_button_id" value="J9UCVA6X8NDF6">
+<table>
+<tr><td><input type="hidden" name="on0" value="Hindi Marathi Nepali Alphabet Mat">Hindi Marathi Nepali Alphabet Mat</td></tr><tr><td><select name="os0">
+	<option value="price">price $49.99 USD</option>
+</select> </td></tr>
+</table>
+<input type="hidden" name="currency_code" value="USD">
+<input type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_buynowCC_LG.gif" border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
+<img alt="" border="0" src="https://www.paypalobjects.com/en_US/i/scr/pixel.gif" width="1" height="1">
+</form>
+
+                    <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="//ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=f8135ac1fcc28eb739d1001b45856996&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
+    </iframe>                    <p><a target="_blank" onclick="return gtag_report_conversion('https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d');" href="https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d">Hindi Marathi Nepali Alphabet Mat - 51 Tiles - EVA Foam Jigsaw Puzzle Floor Play Mat</a><img src="//ir-na.amazon-adsystem.com/e/ir?t=vroombaby-20&l=am2&o=1&a=B07H1N53F3" width="1" height="1" border="0" alt="marathi khelni" style="border:none !important; margin:0px !important;" /></p>
                   <button class="btn btn-primary" data-dismiss="modal" type="button">
                     <i class="fas fa-times"></i>
                     Close</button>
@@ -650,9 +725,21 @@
 
         </ul>
                   <img class="img-fluid d-block mx-auto" src="{% static 'vroombaby/images/portfolio/06-full.jpg' %}" alt="hindi marathi alphabets">
-<iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="//ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=c392ca7a0e3f03e7b1cadb784a773928&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
-    </iframe>                    <p><a target="_blank" onclick="return gtag_report_conversion('https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d');" href="https://www.amazon.com/gp/product/B07H1N53F3/ref=as_li_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B07H1N53F3&linkCode=as2&tag=vroombaby-20&linkId=9c72c9f726c73d140a98d5c4c1f4c54d">Hindi Marathi Nepali Alphabet Mat - 51 Tiles - EVA Foam Jigsaw Puzzle Floor Play Mat</a><img src="//ir-na.amazon-adsystem.com/e/ir?t=vroombaby-20&l=am2&o=1&a=B07H1N53F3" width="1" height="1" border="0" alt="" style="border:none !important; margin:0px !important;" /></p>
-                  <button class="btn btn-primary" data-dismiss="modal" type="button">
+               <form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_top">
+<input type="hidden" name="cmd" value="_s-xclick">
+<input type="hidden" name="hosted_button_id" value="J9UCVA6X8NDF6">
+<table>
+<tr><td><input type="hidden" name="on0" value="Hindi Marathi Nepali Alphabet Mat">Hindi Marathi Nepali Alphabet Mat</td></tr><tr><td><select name="os0">
+	<option value="price">price $49.99 USD</option>
+</select> </td></tr>
+</table>
+<input type="hidden" name="currency_code" value="USD">
+<input type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_buynowCC_LG.gif" border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
+<img alt="" border="0" src="https://www.paypalobjects.com/en_US/i/scr/pixel.gif" width="1" height="1">
+</form>
+
+                <iframe style="width:120px;height:240px;" marginwidth="0" marginheight="0" scrolling="no" frameborder="0" src="//ws-na.amazon-adsystem.com/widgets/q?ServiceVersion=20070822&OneJS=1&Operation=GetAdHtml&MarketPlace=US&source=ac&ref=tf_til&ad_type=product_link&tracking_id=vroombaby-20&marketplace=amazon&region=US&placement=B07H1N53F3&asins=B07H1N53F3&linkId=f8135ac1fcc28eb739d1001b45856996&show_border=true&link_opens_in_new_window=true&price_color=333333&title_color=0066c0&bg_color=ffffff">
+    </iframe>                  <button class="btn btn-primary" data-dismiss="modal" type="button">
                     <i class="fas fa-times"></i>
                     Close</button>
                 </div>
