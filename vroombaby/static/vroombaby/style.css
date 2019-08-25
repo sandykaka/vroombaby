@@ -2,3 +2,9 @@ form {
 margin: 0 auto;
 width:250px;
 }
+
+.item {
+    display: none;
+    position: relative;
+    .transition(.6s ease-in-out left);
+}
