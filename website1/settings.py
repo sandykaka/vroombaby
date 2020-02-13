@@ -32,6 +32,7 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'www.vroombaby.com', 'vroombaby.com',
 # Application definition
 
 INSTALLED_APPS = [
+    'business',
     'vroombaby',
     'django.contrib.admin',
     'django.contrib.auth',
