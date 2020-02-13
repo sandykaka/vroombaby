@@ -1,0 +1,10 @@
+#carouselExampleIndicators{
+margin: auto;
+min-height: 550px;
+max-width: 900px;
+overflow: hidden;
+}
+
+.carousel-item{
+ overflow: hidden; min-height: 550px; max-width: 900px; margin: 0 auto;
+}
