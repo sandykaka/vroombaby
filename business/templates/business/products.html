@@ -238,18 +238,45 @@
                     <p><b>LARGE 12" x 12" pieces, 3/8" thick. Covers 7 ft x 7 ft area.</b> Perfect for rooms, daycares,
                         and schools.
                     <p><b>
-                        <center>$49.95</center>
+                        <center>$59.95</center>
                     </b></p>
                     <center>
-                        <form target="paypal" action="https://www.paypal.com/cgi-bin/webscr" method="post">
-                            <input type="hidden" name="cmd" value="_s-xclick">
-                            <input type="hidden" name="hosted_button_id" value="WCUFGJGU3EQJA">
-                            <input onclick="gtag_report_conversion();" type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_cart_LG.gif"
-                                   border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
-                            <img alt="" border="0" src="https://www.paypalobjects.com/en_US/i/scr/pixel.gif" width="1"
-                                 height="1">
-                        </form>
-                    </center>
+<div id="smart-button-container">
+      <div style="text-align: center;">
+        <div id="paypal-button-container"></div>
+      </div>
+    </div>
+  <script src="https://www.paypal.com/sdk/js?client-id=sb&currency=USD" data-sdk-integration-source="button-factory"></script>
+  <script>
+    function initPayPalButton() {
+      paypal.Buttons({
+        style: {
+          shape: 'pill',
+          color: 'gold',
+          layout: 'vertical',
+          label: 'paypal',
+
+        },
+
+        createOrder: function(data, actions) {
+          return actions.order.create({
+            purchase_units: [{"description":"Hindi Marathi Nepali alphabet puzzle mat","amount":{"currency_code":"USD","value":59.95}}]
+          });
+        },
+
+        onApprove: function(data, actions) {
+          return actions.order.capture().then(function(details) {
+            alert('Transaction completed by ' + details.payer.name.given_name + '!');
+          });
+        },
+
+        onError: function(err) {
+          console.log(err);
+        }
+      }).render('#paypal-button-container');
+    }
+    initPayPalButton();
+  </script>                    </center>
 
                     <p><b>
                         <center>Available on Amazon as well.</center>
@@ -364,18 +391,45 @@
                     <p><b>6" x 6" pieces, 1 cm thick. Covers 4 ft x 3 ft area.</b> Perfect for rooms, daycares,
                         and schools.
                     <p><b>
-                        <center>$39.95</center>
+                        <center>$44.95</center>
                     </b></p>
                     <center>
-                        <form target="paypal" action="https://www.paypal.com/cgi-bin/webscr" method="post">
-                            <input type="hidden" name="cmd" value="_s-xclick">
-                            <input type="hidden" name="hosted_button_id" value="TFM9YLE78YR2E">
-                            <input onclick="gtag_report_conversion();" type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_cart_LG.gif"
-                                   border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
-                            <img alt="" border="0" src="https://www.paypalobjects.com/en_US/i/scr/pixel.gif" width="1"
-                                 height="1">
-                        </form>
-                    </center>
+<div id="smart-button-container1">
+      <div style="text-align: center;">
+        <div id="paypal-button-container1"></div>
+      </div>
+    </div>
+  <script src="https://www.paypal.com/sdk/js?client-id=sb&currency=USD" data-sdk-integration-source="button-factory"></script>
+  <script>
+    function initPayPalButton() {
+      paypal.Buttons({
+        style: {
+          shape: 'pill',
+          color: 'gold',
+          layout: 'vertical',
+          label: 'paypal',
+
+        },
+
+        createOrder: function(data, actions) {
+          return actions.order.create({
+            purchase_units: [{"description":"Telugu alphabet puzzle mat","amount":{"currency_code":"USD","value":44.95}}]
+          });
+        },
+
+        onApprove: function(data, actions) {
+          return actions.order.capture().then(function(details) {
+            alert('Transaction completed by ' + details.payer.name.given_name + '!');
+          });
+        },
+
+        onError: function(err) {
+          console.log(err);
+        }
+      }).render('#paypal-button-container');
+    }
+    initPayPalButton();
+  </script>                    </center>
 
 
                     <p><b>
