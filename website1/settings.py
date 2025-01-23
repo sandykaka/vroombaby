@@ -11,9 +11,6 @@ https://docs.djangoproject.com/en/2.1/ref/settings/
 """
 
 import os
-from dotenv import load_dotenv
-
-load_dotenv()  # Load environment variables from .env file
 
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
@@ -135,6 +132,6 @@ STATIC_URL = '/static/'
 
 X_FRAME_OPTIONS = "ALLOW-FROM https://ws-na.amazon-adsystem.com/"
 
-OAUTH_CLIENT_ID = os.getenv('OAUTH_CLIENT_ID')
-OAUTH_CLIENT_SECRET = os.getenv('OAUTH_CLIENT_SECRET')
-OAUTH_REDIRECT_URI = os.getenv('OAUTH_REDIRECT_URI')
+OAUTH_CLIENT_ID = os.environ['OAUTH_CLIENT_ID']
+OAUTH_CLIENT_SECRET =os.environ['OAUTH_CLIENT_SECRET']
+OAUTH_REDIRECT_URI = os.environ['OAUTH_REDIRECT_URI']
