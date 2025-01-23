@@ -43,7 +43,7 @@ def oauth_callback(request):
 
     # Step 5: Redirect the user back to the Swift app (via deep link or custom URL)
     # The redirect URI that the Swift app is listening to (should match with your app configuration)
-    app_redirect_url = f"coffeeChat://oauth-callback?access_token={access_token}&refresh_token={refresh_token}"
+    app_redirect_url = "coffeeChat://oauth-callback?access_token={}&refresh_token={}".format(access_token, refresh_token)
 
     return redirect(app_redirect_url)
 
