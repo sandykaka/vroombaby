@@ -133,9 +133,7 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATIC_URL = '/static/'
 
 # Static files will be collected here by the `collectstatic` command
-STATICFILES_DIRS = [
-    os.path.join(BASE_DIR, 'static'),  # If you have a 'static' directory in your project
-]
+STATICFILES_DIRS = []
 SECURE_SSL_REDIRECT = True
 X_FRAME_OPTIONS = "ALLOW-FROM https://ws-na.amazon-adsystem.com/"
 
