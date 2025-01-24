@@ -10,11 +10,14 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/2.1/ref/settings/
 """
 
+import environ
 import os
 
-
+# Initialize environment variables
+env = environ.Env()
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+environ.Env.read_env(os.path.join(BASE_DIR, '.env'))  # Set the path to your .env file
 
 
 # Quick-start development settings - unsuitable for production
@@ -131,6 +134,7 @@ STATIC_URL = '/static/'
 
 X_FRAME_OPTIONS = "ALLOW-FROM https://ws-na.amazon-adsystem.com/"
 
-OAUTH_CLIENT_ID = os.environ['OAUTH_CLIENT_ID']
-OAUTH_CLIENT_SECRET =os.environ['OAUTH_CLIENT_SECRET']
-OAUTH_REDIRECT_URI = os.environ['OAUTH_REDIRECT_URI']
+# Now, you can access your environment variables
+OAUTH_CLIENT_ID = env('OAUTH_CLIENT_ID')
+OAUTH_CLIENT_SECRET = env('OAUTH_CLIENT_SECRET')
+OAUTH_REDIRECT_URI = env('OAUTH_REDIRECT_URI')
