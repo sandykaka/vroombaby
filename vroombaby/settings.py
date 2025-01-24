@@ -53,7 +53,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
-    # 'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
     # 'vroombaby.middleware.MyMiddleware',
 
 ]
@@ -135,6 +135,8 @@ STATIC_URL = '/static/'
 # Static files will be collected here by the `collectstatic` command
 STATICFILES_DIRS = []
 SECURE_SSL_REDIRECT = False
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 X_FRAME_OPTIONS = "ALLOW-FROM https://ws-na.amazon-adsystem.com/"
 
 # Now, you can access your environment variables
