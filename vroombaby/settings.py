@@ -134,7 +134,7 @@ STATIC_URL = '/static/'
 
 # Static files will be collected here by the `collectstatic` command
 STATICFILES_DIRS = []
-SECURE_SSL_REDIRECT = True
+SECURE_SSL_REDIRECT = False
 X_FRAME_OPTIONS = "ALLOW-FROM https://ws-na.amazon-adsystem.com/"
 
 # Now, you can access your environment variables
