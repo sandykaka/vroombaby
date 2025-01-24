@@ -5,7 +5,7 @@ import requests
 from django.http import JsonResponse, HttpResponseBadRequest
 from django.shortcuts import redirect
 
-from website1 import settings
+from vroombaby import settings
 
 
 def oauth_callback(request):
