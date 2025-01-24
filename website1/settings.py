@@ -136,6 +136,7 @@ STATIC_URL = '/static/'
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static'),  # If you have a 'static' directory in your project
 ]
+SECURE_SSL_REDIRECT = True
 X_FRAME_OPTIONS = "ALLOW-FROM https://ws-na.amazon-adsystem.com/"
 
 # Now, you can access your environment variables
