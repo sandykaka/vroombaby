@@ -19,36 +19,37 @@ def googleeb914ff572b518f7(request):
 def support_view(request):
     return render(request, 'business/support.html')
 
+import os
+import requests
+from requests.auth import HTTPBasicAuth
+from django.shortcuts import redirect
+from django.http import JsonResponse, HttpResponseRedirect
+
 def oauth_callback(request):
-    # Extract the authorization code from the URL parameters
     code = request.GET.get('code', None)
     error = request.GET.get('error')
 
     if error:
         return JsonResponse({"error": error}, status=400)
     if code:
-        # Exchange the authorization code for an access token by sending a POST request to Zoom
+        # Exchange the authorization code for an access token
         access_token = exchange_code_for_access_token(code)
 
-        # Redirect the user to the custom URL scheme with the access token
-        # The Swift app will capture this redirect and process the access token
-        redirect_url = f"coffeeChat://oauth-callback?access_token={access_token}"
-        return HttpResponseRedirect(redirect_url)
+        if access_token:
+            # Redirect user to Swift app using custom URL scheme
+            redirect_url = f"coffeeChat://oauth-callback?access_token={access_token}"
+            return HttpResponseRedirect(redirect_url)
+        else:
+            return JsonResponse({"error": "Failed to get access token"}, status=400)
 
-    return HttpResponse("Error: No code returned.", status=400)
+    return JsonResponse({"error": "No code returned"}, status=400)
 
 def exchange_code_for_access_token(code):
-    """
-    Function to exchange the authorization code for an access token.
-    You can implement the code exchange here using Zoom API.
-    """
-    # Set up Zoom OAuth token URL and your credentials
     token_url = 'https://zoom.us/oauth/token'
     client_id = os.getenv("ZOOM_CLIENT_ID")
     client_secret = os.getenv("ZOOM_CLIENT_SECRET")
     redirect_uri = os.getenv("ZOOM_REDIRECT_URI")
 
-    # Send a POST request to Zoom API to exchange the authorization code for an access token
     data = {
         'grant_type': 'authorization_code',
         'code': code,
@@ -61,4 +62,5 @@ def exchange_code_for_access_token(code):
         token_data = response.json()
         return token_data.get('access_token')
     else:
+        print("Zoom OAuth error:", response.json())
         return None
