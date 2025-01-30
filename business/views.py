@@ -1,6 +1,6 @@
 import os
 
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.http import HttpResponseRedirect
 from requests.auth import HTTPBasicAuth
@@ -22,7 +22,10 @@ def support_view(request):
 def oauth_callback(request):
     # Extract the authorization code from the URL parameters
     code = request.GET.get('code', None)
+    error = request.GET.get('error')
 
+    if error:
+        return JsonResponse({"error": error}, status=400)
     if code:
         # Exchange the authorization code for an access token by sending a POST request to Zoom
         access_token = exchange_code_for_access_token(code)
