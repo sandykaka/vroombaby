@@ -6,6 +6,7 @@ import requests
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
+from .models import ZoomMeeting
 
 # Create your views here.
 def index(request):
@@ -19,22 +20,6 @@ def googleeb914ff572b518f7(request):
 
 def support_view(request):
     return render(request, 'business/support.html')
-
-# zoom_integration/views.py
-
-import os
-import base64
-import json
-import time
-import jwt
-import requests
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from django.conf import settings
-from .models import ZoomMeeting
-
-# Assume that your settings.py contains:
-# ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET, ZOOM_ACCOUNT_ID
 
 def get_zoom_access_token():
     token_url = f"https://zoom.us/oauth/token?grant_type=account_credentials&account_id={settings.ZOOM_ACCOUNT_ID}"
