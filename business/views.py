@@ -20,42 +20,43 @@ def googleeb914ff572b518f7(request):
 def support_view(request):
     return render(request, 'business/support.html')
 
+# zoom_integration/views.py
+
+import os
+import base64
+import json
+import time
+import jwt
+import requests
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
+from .models import ZoomMeeting
+
+# Assume that your settings.py contains:
+# ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET, ZOOM_ACCOUNT_ID
+
 def get_zoom_access_token():
-    """
-    Use the Server-to-Server OAuth client credentials flow to obtain an access token.
-    """
     token_url = f"https://zoom.us/oauth/token?grant_type=account_credentials&account_id={settings.ZOOM_ACCOUNT_ID}"
     auth_str = f"{settings.ZOOM_CLIENT_ID}:{settings.ZOOM_CLIENT_SECRET}"
     auth_b64 = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
-    headers = {
-        "Authorization": f"Basic {auth_b64}"
-    }
-
+    headers = {"Authorization": f"Basic {auth_b64}"}
     response = requests.post(token_url, headers=headers)
     if response.status_code == 200:
         token_info = response.json()
-        access_token = token_info.get("access_token")
-        return access_token
+        return token_info.get("access_token")
     else:
         print("Error obtaining access token:", response.json())
         return None
 
 @csrf_exempt
 def create_zoom_meeting(request):
-    """
-    Create a Zoom meeting via the REST API.
-    Expects a POST request with a JSON body containing:
-      - topic (optional): meeting topic (default: "Scheduled Meeting")
-      - start_time (required): ISO8601 string (e.g., "2025-02-07T11:00:00Z")
-      - duration (optional): duration in minutes (default: 60)
-    Returns the meeting details as JSON, including the join_url.
-    """
     if request.method != "POST":
         return JsonResponse({"error": "Only POST method is allowed."}, status=405)
 
     try:
         data = json.loads(request.body.decode("utf-8"))
-    except Exception as e:
+    except Exception:
         return JsonResponse({"error": "Invalid JSON data."}, status=400)
 
     topic = data.get("topic", "Scheduled Meeting")
@@ -76,10 +77,10 @@ def create_zoom_meeting(request):
 
     meeting_payload = {
         "topic": topic,
-        "type": 2,  # 2 indicates a scheduled meeting.
+        "type": 2,  # Scheduled meeting
         "start_time": start_time,
         "duration": duration,
-        "timezone": "UTC",  # Adjust this if needed.
+        "timezone": "UTC",  # Adjust if necessary.
         "settings": {
             "host_video": True,
             "participant_video": True,
@@ -96,4 +97,40 @@ def create_zoom_meeting(request):
             "details": response.json()
         }, status=response.status_code)
 
-    return JsonResponse(response.json(), status=201)
+    meeting_details = response.json()
+
+    # Save the meeting details to the database.
+    # Parse the start_time string into a Python datetime if needed.
+    from datetime import datetime
+    try:
+        dt = datetime.fromisoformat(meeting_details["start_time"].replace("Z", "+00:00"))
+    except Exception:
+        dt = None
+
+    ZoomMeeting.objects.create(
+        zoom_id=meeting_details.get("id"),
+        topic=meeting_details.get("topic", topic),
+        join_url=meeting_details.get("join_url"),
+        start_time=dt,
+        duration=meeting_details.get("duration", duration)
+    )
+
+    return JsonResponse(meeting_details, status=201)
+
+# Optionally, create an endpoint to fetch all meetings.
+@csrf_exempt
+def get_meetings(request):
+    if request.method == "GET":
+        meetings = ZoomMeeting.objects.all().order_by("start_time")
+        meeting_list = []
+        for meeting in meetings:
+            meeting_list.append({
+                "zoom_id": meeting.zoom_id,
+                "topic": meeting.topic,
+                "join_url": meeting.join_url,
+                "start_time": meeting.start_time.isoformat(),
+                "duration": meeting.duration
+            })
+        return JsonResponse({"meetings": meeting_list}, status=200)
+    else:
+        return JsonResponse({"error": "Only GET method is allowed."}, status=405)

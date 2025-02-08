@@ -11,4 +11,5 @@ urlpatterns = [
     path('support.html', views.support_view, name='support'),
     path('googleeb914ff572b518f7', views.googleeb914ff572b518f7),
     path('create-meeting/', views.create_zoom_meeting, name='create_zoom_meeting'),
+    path("get-meetings/", views.get_meetings, name="get_meetings"),
 ]
