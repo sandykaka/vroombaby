@@ -47,6 +47,7 @@ def create_zoom_meeting(request):
     topic = data.get("topic", "Scheduled Meeting")
     start_time = data.get("start_time")
     duration = data.get("duration", 60)
+    host_name = data.get("host_name", "Unknown Host")
 
     if not start_time:
         return JsonResponse({"error": "Missing required field: start_time."}, status=400)
@@ -83,6 +84,8 @@ def create_zoom_meeting(request):
         }, status=response.status_code)
 
     meeting_details = response.json()
+    # Inject the host_name into the meeting details.
+    meeting_details["host_name"] = host_name
 
     # Save the meeting details to the database.
     # Parse the start_time string into a Python datetime if needed.
@@ -97,7 +100,8 @@ def create_zoom_meeting(request):
         topic=meeting_details.get("topic", topic),
         join_url=meeting_details.get("join_url"),
         start_time=dt,
-        duration=meeting_details.get("duration", duration)
+        duration=meeting_details.get("duration", duration),
+        host_name=meeting_details.get("host_name")
     )
 
     return JsonResponse(meeting_details, status=201)
