@@ -5,12 +5,20 @@ from django.shortcuts import render
 from django.http import HttpResponseRedirect
 from requests.auth import HTTPBasicAuth
 import requests
+import logging
+
+import json
+logger = logging.getLogger(__name__)
 
 # Create your views here.
 def index(request):
+    logger.debug("Logging configuration successfully loaded.")
     return render(request, 'business/index.html')
 
 def products(request):
+    logger.debug("In product")
+    logger.info("This is an info message")
+    logger.error("This is an error message")
     return render(request, 'business/products.html')
 
 def googleeb914ff572b518f7(request):
@@ -18,49 +26,57 @@ def googleeb914ff572b518f7(request):
 
 def support_view(request):
     return render(request, 'business/support.html')
-
 import os
 import requests
 from requests.auth import HTTPBasicAuth
 from django.shortcuts import redirect
-from django.http import JsonResponse, HttpResponseRedirect
-
+from django.http import JsonResponse,HttpResponseRedirect
+import logging
+from django.views.decorators.csrf import csrf_exempt
+from django.urls import reverse
+logger = logging.getLogger(__name__)
+@csrf_exempt
 def oauth_callback(request):
+    """
+    Handles the OAuth callback from Zoom. If the user is on an iOS device with your app
+    installed and universal links are configured, iOS will open your app directly using thi
+s HTTPS URL.
+    If the view is reached, simply display a confirmation message.
+    """
     code = request.GET.get('code', None)
     error = request.GET.get('error')
 
     if error:
         return JsonResponse({"error": error}, status=400)
+
     if code:
-        # Exchange the authorization code for an access token
-        access_token = exchange_code_for_access_token(code)
+        # Option 1: You can display a confirmation page.
+        html = f"""
+        <html>
+            <head><title>Authentication Complete</title></head>
+            <body>
+                <p>Authentication is complete. Please return to the app.</p>
+            </body>
+        </html>
+        """
+        return HttpResponse(html)
+    return JsonResponse({"error": "No code received"}, status=400)
 
-        if access_token:
-            # Redirect user to Swift app using custom URL scheme
-            redirect_url = f"coffeeChat://oauth-callback?access_token={access_token}"
-            return HttpResponseRedirect(redirect_url)
-        else:
-            return JsonResponse({"error": "Failed to get access token"}, status=400)
 
-    return JsonResponse({"error": "No code returned"}, status=400)
-
-def exchange_code_for_access_token(code):
-    token_url = 'https://zoom.us/oauth/token'
-    client_id = os.getenv("ZOOM_CLIENT_ID")
-    client_secret = os.getenv("ZOOM_CLIENT_SECRET")
-    redirect_uri = os.getenv("ZOOM_REDIRECT_URI")
-
+def apple_site(request):
+    # Define the JSON data as a Python dict
     data = {
-        'grant_type': 'authorization_code',
-        'code': code,
-        'redirect_uri': redirect_uri
+        "applinks": {
+            "apps": [],
+            "details": [
+                {
+                    "appID": "4WKM8GU86V.bleedblue.coffeeChat",
+                    "paths": [ "/oauth/callback*" ]
+                }
+            ]
+        }
     }
-
-    response = requests.post(token_url, data=data, auth=HTTPBasicAuth(client_id, client_secret))
-
-    if response.status_code == 200:
-        token_data = response.json()
-        return token_data.get('access_token')
-    else:
-        print("Zoom OAuth error:", response.json())
-        return None
+    # Convert the dict to a JSON string
+    json_data = json.dumps(data)
+    # Return an HTTP response with the appropriate content type
+    return HttpResponse(json_data, content_type="application/json")

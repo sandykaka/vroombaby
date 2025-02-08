@@ -10,5 +10,6 @@ urlpatterns = [
     path('products.html',views.products, name='products'),
     path('support.html', views.support_view, name='support'),
     path('googleeb914ff572b518f7', views.googleeb914ff572b518f7),
-    path('oauth/callback/', views.oauth_callback, name='oauth_callback'),
+    path('oauth/callback', views.oauth_callback, name='oauth_callback'),
+    path('apple-app-site-association', views.apple_site, name='apple_site'),
 ]

@@ -14,9 +14,22 @@ import os
 
 from dotenv import load_dotenv
 
+import urllib.parse
+from django.http import HttpResponseRedirect
+
+class CustomHttpResponseRedirect(HttpResponseRedirect):
+    allowed_schemes = ['http', 'https', 'coffeeChat']
+
+def safe_redirect(url):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme in CustomHttpResponseRedirect.allowed_schemes:
+        return CustomHttpResponseRedirect(url)
+    else:
+        raise ValueError(f"Unsafe redirect to URL with protocol '{parsed.scheme}'")
 
 # Load .env file
 load_dotenv()
+
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -29,10 +42,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECRET_KEY = ')1x1+(1p0x*=8_0lfcn8^6!*#6ri-9zavxi14@nyug%!pa5k0m'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'www.vroombaby.com', 'vroombaby.com', '44.214.122.27', '172.26.12.62',
-                 'www.schoolconvo.com', 'schoolconvo.com']
+                                     'www.schoolconvo.com', 'schoolconvo.com']
 # ALLOWED_HOSTS = []
 
 
@@ -47,6 +60,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'csp',
 ]
 
 MIDDLEWARE = [
@@ -57,6 +71,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+    'csp.middleware.CSPMiddleware',  # Add CSP middleware
     # 'django.middleware.clickjacking.XFrameOptionsMiddleware',
     # 'vroombaby.middleware.MyMiddleware',
 
@@ -141,12 +156,26 @@ X_FRAME_OPTIONS = "ALLOW-FROM https://ws-na.amazon-adsystem.com/"
 SECURE_SSL_REDIRECT = False  # NGINX handles this
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-
+SECURE_BROWSER_XSS_FILTER = True  # Enable XSS protection
+SECURE_CONTENT_TYPE_NOSNIFF = True  # Prevent MIME-type sniffing
+SESSION_COOKIE_SECURE = True  # Use HTTPS for cookies
+CSRF_COOKIE_SECURE = True  # Use HTTPS for CSRF cookies
 
 # Retrieve environment variables
 ZOOM_CLIENT_ID = os.getenv("ZOOM_CLIENT_ID")
 ZOOM_CLIENT_SECRET = os.getenv("ZOOM_CLIENT_SECRET")
 ZOOM_REDIRECT_URI = os.getenv("ZOOM_REDIRECT_URI")
+
+SECURE_HSTS_SECONDS = 31536000  # Enable HSTS for 1 year
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True  # Apply to all subdomains
+SECURE_HSTS_PRELOAD = True  # Preload HSTS in browsers
+
+
+CSP_DEFAULT_SRC = ["'self'"]  # Restrict content to same origin
+CSP_SCRIPT_SRC = ["'self'", "https://zoom.us", "https://schoolconvo.com"]  # Allow scriptsfrom your domain and Zoom
+CSP_STYLE_SRC = ["'self'", "'unsafe-inline'"]  # Allow inline styles
+CSP_IMG_SRC = ["'self'", "data:"]  # Allow images from your domain and inline data URIs
+CSP_CONNECT_SRC = ["'self'", "https://zoom.us", "https://schoolconvo.com"]  # Allow connections to your domain and Zoom
 
 LOGGING = {
     'version': 1,
@@ -163,21 +192,26 @@ LOGGING = {
     },
     'handlers': {
         'file': {
-            'level': 'ERROR',
+            'level': 'DEBUG',
             'class': 'logging.FileHandler',
-            'filename': '/django_error.log',
+            'filename': '/home/ubuntu/vroombaby/logs/django_error.log',
             'formatter': 'verbose',
         },
         'console': {
-            'level': 'INFO',
+            'level': 'DEBUG',
             'class': 'logging.StreamHandler',
             'formatter': 'simple',
         },
     },
     'loggers': {
-        'django': {
+        'website1': {
             'handlers': ['file', 'console'],
-            'level': 'INFO',
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'business': {  # Custom logger for your application
+            'handlers': ['file', 'console'],
+            'level': 'DEBUG',  # Capture all levels
             'propagate': True,
         },
     },
