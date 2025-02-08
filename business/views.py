@@ -118,7 +118,8 @@ def get_meetings(request):
                 "topic": meeting.topic,
                 "join_url": meeting.join_url,
                 "start_time": meeting.start_time.isoformat(),
-                "duration": meeting.duration
+                "duration": meeting.duration,
+                "host_name": meeting.host_name
             })
         return JsonResponse({"meetings": meeting_list}, status=200)
     else:
