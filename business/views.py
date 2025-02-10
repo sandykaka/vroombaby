@@ -114,7 +114,7 @@ def get_meetings(request):
         meeting_list = []
         for meeting in meetings:
             meeting_list.append({
-                "zoom_id": meeting.zoom_id,
+                "id": meeting.zoom_id,
                 "topic": meeting.topic,
                 "join_url": meeting.join_url,
                 "start_time": meeting.start_time.isoformat(),
