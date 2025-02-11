@@ -125,8 +125,8 @@ def get_meetings(request):
                 "join_url": meeting.join_url,
                 "start_time": meeting.start_time.isoformat(),
                 "duration": meeting.duration,
-                "host_name": request.host_name,
-                "host_email": request.host_email,
+                "host_name": meeting.host_name,
+                "host_email": meeting.host_email,
                 "linkedin_profile_url": meeting.linkedin_profile_url
             })
         return JsonResponse({"meetings": meeting_list}, status=200)
