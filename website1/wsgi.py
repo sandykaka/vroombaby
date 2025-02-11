@@ -20,5 +20,5 @@ service_account_path = os.environ.get('FIREBASE_SERVICE_ACCOUNT_PATH', '/home/ub
 cred = credentials.Certificate(service_account_path)
 firebase_admin.initialize_app(cred)
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'your_project.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'website1.settings')
 application = get_wsgi_application()
