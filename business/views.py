@@ -36,6 +36,7 @@ def get_zoom_access_token():
         return None
 
 @csrf_exempt
+@login_required
 def create_zoom_meeting(request):
     if request.method != "POST":
         return JsonResponse({"error": "Only POST method is allowed."}, status=405)
@@ -49,7 +50,8 @@ def create_zoom_meeting(request):
     start_time = data.get("start_time")
     duration = data.get("duration", 60)
     host_name = data.get("host_name", "Unknown Host")
-    host_email = data.get("host_email", "No host email")
+    # Instead of taking host_email from data, set it from the authenticated user.
+    host_email = request.user.email
     linkedin_profile_url = data.get("linkedin_profile_url", "No linkedin url")
 
     if not start_time:
@@ -89,6 +91,7 @@ def create_zoom_meeting(request):
     meeting_details = response.json()
     # Inject the host_name into the meeting details.
     meeting_details["host_name"] = host_name
+    meeting_details["host_email"] = host_email
     meeting_details["linkedin_profile_url"] = linkedin_profile_url
 
     # Save the meeting details to the database.
