@@ -48,6 +48,7 @@ def create_zoom_meeting(request):
     start_time = data.get("start_time")
     duration = data.get("duration", 60)
     host_name = data.get("host_name", "Unknown Host")
+    linkedin_profile_url = data.get("linkedin_profile_url", "No linkedin url")
 
     if not start_time:
         return JsonResponse({"error": "Missing required field: start_time."}, status=400)
@@ -86,6 +87,7 @@ def create_zoom_meeting(request):
     meeting_details = response.json()
     # Inject the host_name into the meeting details.
     meeting_details["host_name"] = host_name
+    meeting_details["linkedin_profile_url"] = linkedin_profile_url
 
     # Save the meeting details to the database.
     # Parse the start_time string into a Python datetime if needed.
@@ -101,7 +103,8 @@ def create_zoom_meeting(request):
         join_url=meeting_details.get("join_url"),
         start_time=dt,
         duration=meeting_details.get("duration", duration),
-        host_name=meeting_details.get("host_name")
+        host_name=meeting_details.get("host_name"),
+        linkedin_profile_url=meeting_details.get("linkedin_profile_url")
     )
 
     return JsonResponse(meeting_details, status=201)
@@ -119,7 +122,8 @@ def get_meetings(request):
                 "join_url": meeting.join_url,
                 "start_time": meeting.start_time.isoformat(),
                 "duration": meeting.duration,
-                "host_name": meeting.host_name
+                "host_name": meeting.host_name,
+                "linkedin_profile_url": meeting.linkedin_profile_url
             })
         return JsonResponse({"meetings": meeting_list}, status=200)
     else:

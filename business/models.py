@@ -8,6 +8,7 @@ class ZoomMeeting(models.Model):
     duration = models.IntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
     host_name = models.CharField(max_length=255, null=True, blank=True)
+    linkedin_profile_url = models.URLField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.topic} at {self.start_time}"
