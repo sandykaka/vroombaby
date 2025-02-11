@@ -105,7 +105,7 @@ def create_zoom_meeting(request):
         start_time=dt,
         duration=meeting_details.get("duration", duration),
         host_name=meeting_details.get("host_name"),
-        host_email=request.user.email,
+        host_email=meeting_details.get("host_email"),
         linkedin_profile_url=meeting_details.get("linkedin_profile_url")
     )
 
