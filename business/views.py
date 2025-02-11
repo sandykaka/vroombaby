@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
 from django.shortcuts import render
@@ -46,11 +48,12 @@ def create_zoom_meeting(request):
     except Exception:
         return JsonResponse({"error": "Invalid JSON data."}, status=400)
 
+    # Get parameters from the incoming JSON.
     topic = data.get("topic", "Scheduled Meeting")
     start_time = data.get("start_time")
     duration = data.get("duration", 60)
     host_name = data.get("host_name", "Unknown Host")
-    # Instead of taking host_email from data, set it from the authenticated user.
+    # Instead of using the client‑sent host_email, override it with the authenticated user's email.
     host_email = request.user.email
     linkedin_profile_url = data.get("linkedin_profile_url", "No linkedin url")
 
@@ -89,19 +92,20 @@ def create_zoom_meeting(request):
         }, status=response.status_code)
 
     meeting_details = response.json()
-    # Inject the host_name into the meeting details.
+
+    # Override the meeting details with our host values.
     meeting_details["host_name"] = host_name
     meeting_details["host_email"] = host_email
     meeting_details["linkedin_profile_url"] = linkedin_profile_url
 
-    # Save the meeting details to the database.
-    # Parse the start_time string into a Python datetime if needed.
-    from datetime import datetime
+    # Convert Zoom's start_time to a Python datetime.
     try:
+        # Replace "Z" with "+00:00" so fromisoformat can parse it.
         dt = datetime.fromisoformat(meeting_details["start_time"].replace("Z", "+00:00"))
-    except Exception:
-        dt = None
+    except Exception as e:
+        return JsonResponse({"error": f"Invalid start_time format: {str(e)}"}, status=500)
 
+    # Save the meeting details to the database.
     ZoomMeeting.objects.create(
         zoom_id=meeting_details.get("id"),
         topic=meeting_details.get("topic", topic),
@@ -122,15 +126,21 @@ def get_meetings(request):
         meetings = ZoomMeeting.objects.all().order_by("start_time")
         meeting_list = []
         for meeting in meetings:
+            try:
+                start_time_str = meeting.start_time.isoformat() if meeting.start_time else ""
+            except Exception as e:
+                print(f"Error formatting start_time for meeting {meeting.zoom_id}: {e}")
+                start_time_str = "Invalid Date"
+
             meeting_list.append({
                 "id": meeting.zoom_id,
                 "topic": meeting.topic,
                 "join_url": meeting.join_url,
-                "start_time": meeting.start_time.isoformat(),
+                "start_time": start_time_str,
                 "duration": meeting.duration,
                 "host_name": meeting.host_name,
                 "host_email": meeting.host_email,
-                "linkedin_profile_url": meeting.linkedin_profile_url
+                "linkedin_profile_url": meeting.linkedin_profile_url,
             })
         return JsonResponse({"meetings": meeting_list}, status=200)
     else:
