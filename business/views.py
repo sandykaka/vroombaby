@@ -105,6 +105,7 @@ def create_zoom_meeting(request):
         start_time=dt,
         duration=meeting_details.get("duration", duration),
         host_name=meeting_details.get("host_name"),
+        host_email=meeting_details.get("host_email"),
         linkedin_profile_url=meeting_details.get("linkedin_profile_url")
     )
 
@@ -144,7 +145,7 @@ def delete_meeting(request, meeting_id):
 
     # Check that the current user is the meeting host.
     # This example assumes meeting.host_name stores the host's email.
-    if meeting.host_name.lower() != request.user.email.lower():
+    if meeting.host_email.lower() != request.user.email.lower():
         return JsonResponse({"error": "You are not authorized to delete this meeting."}, status=403)
 
     meeting.delete()
