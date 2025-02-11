@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 from django.contrib.auth.decorators import login_required
@@ -10,6 +11,8 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from .models import ZoomMeeting
+
+logger = logging.getLogger(__name__)
 
 # Create your views here.
 def index(request):
@@ -129,7 +132,7 @@ def get_meetings(request):
             try:
                 start_time_str = meeting.start_time.isoformat() if meeting.start_time else ""
             except Exception as e:
-                print(f"Error formatting start_time for meeting {meeting.zoom_id}: {e}")
+                logger.debug(f"Error formatting start_time for meeting {meeting.zoom_id}: {e}")
                 start_time_str = "Invalid Date"
 
             meeting_list.append({

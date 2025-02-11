@@ -29,7 +29,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECRET_KEY = ')1x1+(1p0x*=8_0lfcn8^6!*#6ri-9zavxi14@nyug%!pa5k0m'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'www.vroombaby.com', 'vroombaby.com', '44.214.122.27', '172.26.12.62',
                  'www.schoolconvo.com', 'schoolconvo.com']
@@ -148,3 +148,34 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 ZOOM_CLIENT_ID = os.environ.get("ZOOM_CLIENT_ID")
 ZOOM_CLIENT_SECRET = os.environ.get("ZOOM_CLIENT_SECRET")
 ZOOM_ACCOUNT_ID = os.environ.get("ZOOM_ACCOUNT_ID")
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+        # Optionally add file handlers:
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': '/home/ubuntu/vroombaby/logs/django_error.log',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+        },
+        'website1': {  # Replace 'your_app' with your app's name.
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'business': {  # Replace 'your_app' with your app's name.
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+    },
+}
