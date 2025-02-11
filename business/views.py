@@ -1,3 +1,4 @@
+from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
 from django.shortcuts import render
 import base64
@@ -128,3 +129,24 @@ def get_meetings(request):
         return JsonResponse({"meetings": meeting_list}, status=200)
     else:
         return JsonResponse({"error": "Only GET method is allowed."}, status=405)
+
+@csrf_exempt
+@login_required  # Ensure the user is authenticated.
+def delete_meeting(request, meeting_id):
+    if request.method != "DELETE":
+        return JsonResponse({"error": "Only DELETE method is allowed."}, status=405)
+
+    try:
+        # Assuming meeting_id in the URL corresponds to the ZoomMeeting.zoom_id field.
+        meeting = ZoomMeeting.objects.get(zoom_id=meeting_id)
+    except ZoomMeeting.DoesNotExist:
+        return JsonResponse({"error": "Meeting not found."}, status=404)
+
+    # Check that the current user is the meeting host.
+    # This example assumes meeting.host_name stores the host's email.
+    if meeting.host_name.lower() != request.user.email.lower():
+        return JsonResponse({"error": "You are not authorized to delete this meeting."}, status=403)
+
+    meeting.delete()
+    # 204 No Content indicates success with no response body.
+    return JsonResponse({}, status=204)
