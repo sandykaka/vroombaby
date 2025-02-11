@@ -49,6 +49,7 @@ def create_zoom_meeting(request):
     start_time = data.get("start_time")
     duration = data.get("duration", 60)
     host_name = data.get("host_name", "Unknown Host")
+    host_email = data.get("host_email", "No host email")
     linkedin_profile_url = data.get("linkedin_profile_url", "No linkedin url")
 
     if not start_time:
