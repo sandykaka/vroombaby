@@ -11,6 +11,9 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from .models import ZoomMeeting
+from functools import wraps
+from django.http import JsonResponse
+from firebase_admin import auth as firebase_auth
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,7 @@ def get_zoom_access_token():
         return None
 
 @csrf_exempt
-@login_required
+@firebase_login_required
 def create_zoom_meeting(request):
     if request.method != "POST":
         return JsonResponse({"error": "Only POST method is allowed."}, status=405)
@@ -150,7 +153,7 @@ def get_meetings(request):
         return JsonResponse({"error": "Only GET method is allowed."}, status=405)
 
 @csrf_exempt
-@login_required  # Ensure the user is authenticated.
+@firebase_login_required  # Ensure the user is authenticated.
 def delete_meeting(request, meeting_id):
     if request.method != "DELETE":
         return JsonResponse({"error": "Only DELETE method is allowed."}, status=405)
@@ -169,3 +172,19 @@ def delete_meeting(request, meeting_id):
     meeting.delete()
     # 204 No Content indicates success with no response body.
     return JsonResponse({}, status=204)
+
+def firebase_login_required(view_func):
+    @wraps(view_func)
+    def _wrapped_view(request, *args, **kwargs):
+        auth_header = request.META.get('HTTP_AUTHORIZATION')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return JsonResponse({"error": "Authentication credentials were not provided."}, status=401)
+        id_token = auth_header.split(" ")[1]
+        try:
+            decoded_token = firebase_auth.verify_id_token(id_token)
+            # Attach the decoded token (or user info) to the request.
+            request.firebase_user = decoded_token
+        except Exception as e:
+            return JsonResponse({"error": "Invalid token", "details": str(e)}, status=401)
+        return view_func(request, *args, **kwargs)
+    return _wrapped_view
