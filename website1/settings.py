@@ -149,6 +149,9 @@ ZOOM_CLIENT_ID = os.environ.get("ZOOM_CLIENT_ID")
 ZOOM_CLIENT_SECRET = os.environ.get("ZOOM_CLIENT_SECRET")
 ZOOM_ACCOUNT_ID = os.environ.get("ZOOM_ACCOUNT_ID")
 
+LOGIN_URL = '/login/'
+LOGOUT_URL = '/logout/'
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
