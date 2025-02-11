@@ -43,6 +43,22 @@ def get_zoom_access_token():
         print("Error obtaining access token:", response.json())
         return None
 
+def firebase_login_required(view_func):
+    @wraps(view_func)
+    def _wrapped_view(request, *args, **kwargs):
+        auth_header = request.META.get('HTTP_AUTHORIZATION')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return JsonResponse({"error": "Authentication credentials were not provided."}, status=401)
+        id_token = auth_header.split(" ")[1]
+        try:
+            decoded_token = firebase_auth.verify_id_token(id_token)
+            # Attach the decoded token (or user info) to the request.
+            request.firebase_user = decoded_token
+        except Exception as e:
+            return JsonResponse({"error": "Invalid token", "details": str(e)}, status=401)
+        return view_func(request, *args, **kwargs)
+    return _wrapped_view
+
 @csrf_exempt
 @firebase_login_required
 def create_zoom_meeting(request):
@@ -173,18 +189,3 @@ def delete_meeting(request, meeting_id):
     # 204 No Content indicates success with no response body.
     return JsonResponse({}, status=204)
 
-def firebase_login_required(view_func):
-    @wraps(view_func)
-    def _wrapped_view(request, *args, **kwargs):
-        auth_header = request.META.get('HTTP_AUTHORIZATION')
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return JsonResponse({"error": "Authentication credentials were not provided."}, status=401)
-        id_token = auth_header.split(" ")[1]
-        try:
-            decoded_token = firebase_auth.verify_id_token(id_token)
-            # Attach the decoded token (or user info) to the request.
-            request.firebase_user = decoded_token
-        except Exception as e:
-            return JsonResponse({"error": "Invalid token", "details": str(e)}, status=401)
-        return view_func(request, *args, **kwargs)
-    return _wrapped_view
