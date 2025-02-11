@@ -70,13 +70,12 @@ def create_zoom_meeting(request):
     except Exception:
         return JsonResponse({"error": "Invalid JSON data."}, status=400)
 
-    # Get parameters from the incoming JSON.
     topic = data.get("topic", "Scheduled Meeting")
     start_time = data.get("start_time")
     duration = data.get("duration", 60)
     host_name = data.get("host_name", "Unknown Host")
-    # Instead of using the client‑sent host_email, override it with the authenticated user's email.
-    host_email = request.user.email
+    # Use the authenticated user's email from firebase_token instead of request.user.email.
+    host_email = request.firebase_user.get("email", "No host email")
     linkedin_profile_url = data.get("linkedin_profile_url", "No linkedin url")
 
     if not start_time:
@@ -114,20 +113,17 @@ def create_zoom_meeting(request):
         }, status=response.status_code)
 
     meeting_details = response.json()
-
     # Override the meeting details with our host values.
     meeting_details["host_name"] = host_name
     meeting_details["host_email"] = host_email
     meeting_details["linkedin_profile_url"] = linkedin_profile_url
 
-    # Convert Zoom's start_time to a Python datetime.
+    # Parse the start_time string into a Python datetime.
     try:
-        # Replace "Z" with "+00:00" so fromisoformat can parse it.
         dt = datetime.fromisoformat(meeting_details["start_time"].replace("Z", "+00:00"))
     except Exception as e:
         return JsonResponse({"error": f"Invalid start_time format: {str(e)}"}, status=500)
 
-    # Save the meeting details to the database.
     ZoomMeeting.objects.create(
         zoom_id=meeting_details.get("id"),
         topic=meeting_details.get("topic", topic),
