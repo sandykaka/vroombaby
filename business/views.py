@@ -105,7 +105,7 @@ def create_zoom_meeting(request):
         start_time=dt,
         duration=meeting_details.get("duration", duration),
         host_name=meeting_details.get("host_name"),
-        host_email=meeting_details.get("host_email"),
+        host_email=request.user.email,
         linkedin_profile_url=meeting_details.get("linkedin_profile_url")
     )
 
@@ -124,7 +124,7 @@ def get_meetings(request):
                 "join_url": meeting.join_url,
                 "start_time": meeting.start_time.isoformat(),
                 "duration": meeting.duration,
-                "host_name": meeting.host_name,
+                "host_name": request.host_name,
                 "linkedin_profile_url": meeting.linkedin_profile_url
             })
         return JsonResponse({"meetings": meeting_list}, status=200)
