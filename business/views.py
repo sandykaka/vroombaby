@@ -191,3 +191,55 @@ def delete_meeting(request, meeting_id):
     # 204 No Content indicates success with no response body.
     return JsonResponse({}, status=204)
 
+@csrf_exempt
+@firebase_login_required
+def update_meeting(request, meeting_id):
+    if request.method not in ["PUT", "PATCH"]:
+        return JsonResponse({"error": "Only PUT or PATCH method is allowed."}, status=405)
+
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+    except Exception as e:
+        return JsonResponse({"error": "Invalid JSON data.", "details": str(e)}, status=400)
+
+    try:
+        # Assuming meeting_id corresponds to ZoomMeeting.zoom_id
+        meeting = ZoomMeeting.objects.get(zoom_id=meeting_id)
+    except ZoomMeeting.DoesNotExist:
+        return JsonResponse({"error": "Meeting not found."}, status=404)
+
+    # Verify that the current user is authorized to update this meeting.
+    current_email = request.firebase_user.get("email", "").lower()
+    if meeting.host_email.lower() != current_email:
+        return JsonResponse({"error": "You are not authorized to update this meeting."}, status=403)
+
+    # Update fields if they are provided in the request.
+    if "topic" in data:
+        meeting.topic = data["topic"]
+    if "start_time" in data:
+        try:
+            # Replace "Z" with "+00:00" so that datetime.fromisoformat can parse the string.
+            meeting.start_time = datetime.fromisoformat(data["start_time"].replace("Z", "+00:00"))
+        except Exception as e:
+            return JsonResponse({"error": f"Invalid start_time format: {str(e)}"}, status=400)
+    if "duration" in data:
+        meeting.duration = data["duration"]
+    if "host_name" in data:
+        meeting.host_name = data["host_name"]
+    if "linkedin_profile_url" in data:
+        meeting.linkedin_profile_url = data["linkedin_profile_url"]
+
+    meeting.save()
+
+    updated_meeting = {
+        "id": meeting.zoom_id,
+        "topic": meeting.topic,
+        "join_url": meeting.join_url,
+        "start_time": meeting.start_time.isoformat(),
+        "duration": meeting.duration,
+        "host_name": meeting.host_name,
+        "host_email": meeting.host_email,
+        "linkedin_profile_url": meeting.linkedin_profile_url,
+    }
+
+    return JsonResponse(updated_meeting, status=200)

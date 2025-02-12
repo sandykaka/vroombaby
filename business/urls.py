@@ -12,4 +12,5 @@ urlpatterns = [
     path('create-meeting/', views.create_zoom_meeting, name='create_zoom_meeting'),
     path("get-meetings/", views.get_meetings, name="get_meetings"),
     path('delete-meeting/<int:meeting_id>/', views.delete_meeting, name='delete_meeting'),
+    path('update-meeting/<int:meeting_id>/', views.update_meeting, name='update_meeting'),
 ]
