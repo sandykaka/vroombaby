@@ -165,20 +165,26 @@ def get_meetings(request):
         return JsonResponse({"error": "Only GET method is allowed."}, status=405)
 
 @csrf_exempt
-@firebase_login_required  # Ensure the user is authenticated.
+@firebase_login_required  # Ensures that the request is authenticated via Firebase token.
 def delete_meeting(request, meeting_id):
     if request.method != "DELETE":
         return JsonResponse({"error": "Only DELETE method is allowed."}, status=405)
 
     try:
-        # Assuming meeting_id in the URL corresponds to the ZoomMeeting.zoom_id field.
+        # Assuming meeting_id corresponds to the ZoomMeeting.zoom_id field.
         meeting = ZoomMeeting.objects.get(zoom_id=meeting_id)
     except ZoomMeeting.DoesNotExist:
         return JsonResponse({"error": "Meeting not found."}, status=404)
 
-    # Check that the current user is the meeting host.
-    # This example assumes meeting.host_name stores the host's email.
-    if meeting.host_email.lower() != request.user.email.lower():
+    # Use the Firebase token information instead of request.user.
+    current_email = request.firebase_user.get("email", "").lower()
+    meeting_host_email = meeting.host_email.lower() if meeting.host_email else ""
+
+    # Debug print statements (remove in production).
+    logger.debug("Current user email from token:", current_email)
+    logger.debug("Meeting host email:", meeting_host_email)
+
+    if current_email != meeting_host_email:
         return JsonResponse({"error": "You are not authorized to delete this meeting."}, status=403)
 
     meeting.delete()
