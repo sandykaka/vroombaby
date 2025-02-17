@@ -14,7 +14,7 @@ from django.core.wsgi import get_wsgi_application
 
 # Set the path to your service account key JSON file.
 # It’s best to load this path from an environment variable.
-service_account_path = os.environ.get('FIREBASE_SERVICE_ACCOUNT_PATH', '/home/ubuntu/vroombaby/serviceAccountKey.json')
+service_account_path = os.environ.get('FIREBASE_SERVICE_ACCOUNT_PATH', '/home/ubuntu/vroombaby/coffeewithexpert_service_account_key.json')
 
 # Initialize Firebase Admin.
 cred = credentials.Certificate(service_account_path)
