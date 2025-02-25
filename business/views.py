@@ -30,6 +30,9 @@ def googleeb914ff572b518f7(request):
 def support_view(request):
     return render(request, 'business/support.html')
 
+def privacy_view(request):
+    return render(request, 'business/privacy.html')
+
 def get_zoom_access_token():
     token_url = f"https://zoom.us/oauth/token?grant_type=account_credentials&account_id={settings.ZOOM_ACCOUNT_ID}"
     auth_str = f"{settings.ZOOM_CLIENT_ID}:{settings.ZOOM_CLIENT_SECRET}"
