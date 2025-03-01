@@ -1,4 +1,5 @@
 import logging
+import secrets
 import urllib
 from datetime import datetime
 from functools import wraps
@@ -6,7 +7,7 @@ import base64
 import json
 import requests
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.views.decorators.csrf import csrf_exempt
 from firebase_admin import auth as firebase_auth
 
@@ -245,10 +246,30 @@ def update_meeting(request, meeting_id):
 
 # ===================== LinkedIn OAuth Endpoints =====================
 
-# Endpoint to handle the LinkedIn callback and fetch user profile information.
+def linkedin_login(request):
+    # Generate a secure random state token for CSRF protection.
+    state = secrets.token_urlsafe(16)
+    request.session["linkedin_oauth_state"] = state
+
+    params = {
+        "response_type": "code",
+        "client_id": settings.LINKEDIN_CLIENT_ID,
+        "redirect_uri": settings.LINKEDIN_REDIRECT_URI,  # e.g., "https://coffeewithexpert.com/linkedin-callback"
+        "scope": "r_liteprofile",  # add additional scopes if needed
+        "state": state,
+    }
+    auth_url = f"https://www.linkedin.com/oauth/v2/authorization?{urllib.parse.urlencode(params)}"
+    return redirect(auth_url)
 
 @csrf_exempt
 def linkedin_callback(request):
+    # Verify the state parameter to protect against CSRF.
+    state_received = request.GET.get("state")
+    state_stored = request.session.pop("linkedin_oauth_state", None)
+    if not state_received or not state_stored or state_received != state_stored:
+        logger.error("Invalid state parameter: received %s, expected %s", state_received, state_stored)
+        return JsonResponse({"error": "Invalid state parameter"}, status=400)
+
     # Retrieve the authorization code from LinkedIn's redirect.
     code = request.GET.get("code")
     if not code:
@@ -259,7 +280,7 @@ def linkedin_callback(request):
     token_params = {
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": settings.LINKEDIN_REDIRECT_URI,  # This must match your Authorized Redirect URL.
+        "redirect_uri": settings.LINKEDIN_REDIRECT_URI,
         "client_id": settings.LINKEDIN_CLIENT_ID,
         "client_secret": settings.LINKEDIN_CLIENT_SECRET,
     }
@@ -295,23 +316,7 @@ def linkedin_callback(request):
     headline = profile_data.get("headline")
     full_name = f"{first_name} {last_name}" if first_name and last_name else ""
 
-    # Store the user's details in Firestore.
-    # try:
-    #     user_doc = {
-    #         "linkedin_id": linkedin_id,
-    #         "full_name": full_name,
-    #         "headline": headline,
-    #         # Optionally store the access token (be cautious with security):
-    #         # "access_token": access_token,
-    #         "updated_at": firestore.SERVER_TIMESTAMP,
-    #     }
-    #     db.collection("linkedin_users").document(linkedin_id).set(user_doc)
-    # except Exception as e:
-    #     logger.exception("Error saving user data to Firestore: %s", e)
-    #     return JsonResponse({"error": "Error saving user data"}, status=500)
-
     # Redirect back to your iOS app using a custom URL scheme.
-    # Ensure that the scheme (e.g., "yourapp://") is registered in your iOS project.
     ios_redirect_scheme = "coffeewithexpert://linkedin_callback"
     query_params = {
         "full_name": full_name,
