@@ -254,10 +254,12 @@ def linkedin_login(request):
     params = {
         "response_type": "code",
         "client_id": settings.LINKEDIN_CLIENT_ID,
-        "redirect_uri": settings.LINKEDIN_REDIRECT_URI,  # e.g., "https://coffeewithexpert.com/linkedin-callback"
-        "scope": "openid profile email",  # Updated scopes as per your LinkedIn app authorization
+        "redirect_uri": settings.LINKEDIN_REDIRECT_URI,
+        # Request the proper scopes so you have permission to fetch basic profile data.
+        "scope": "openid r_liteprofile r_emailaddress",
         "state": state,
     }
+
     auth_url = f"https://www.linkedin.com/oauth/v2/authorization?{urllib.parse.urlencode(params)}"
     return redirect(auth_url)
 
