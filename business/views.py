@@ -332,4 +332,20 @@ def linkedin_callback(request):
         "linkedin_id": linkedin_id,
     }
     redirect_url = ios_redirect_scheme + "?" + urllib.parse.urlencode(query_params)
-    return HttpResponseRedirect(redirect_url)
+    return custom_redirect(redirect_url)
+
+def custom_redirect(url):
+    html = f"""
+    <html>
+      <head>
+        <meta http-equiv="refresh" content="0; url={url}">
+        <script type="text/javascript">
+          window.location.href = "{url}";
+        </script>
+      </head>
+      <body>
+        If you are not redirected automatically, <a href="{url}">click here</a>.
+      </body>
+    </html>
+    """
+    return HttpResponse(html)
