@@ -14,4 +14,5 @@ urlpatterns = [
     path("get-meetings/", views.get_meetings, name="get_meetings"),
     path('delete-meeting/<int:meeting_id>/', views.delete_meeting, name='delete_meeting'),
     path('update-meeting/<int:meeting_id>/', views.update_meeting, name='update_meeting'),
+    path('linkedin-callback/', views.linkedin_callback, name='linkedin_callback'),
 ]

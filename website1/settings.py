@@ -150,6 +150,10 @@ ZOOM_ACCOUNT_ID = os.environ.get("ZOOM_ACCOUNT_ID")
 LOGIN_URL = '/login/'
 LOGOUT_URL = '/logout/'
 
+LINKEDIN_REDIRECT_URI = os.environ.get("LINKEDIN_REDIRECT_URI")
+LINKEDIN_CLIENT_ID = os.environ.get("LINKEDIN_CLIENT_ID")
+LINKEDIN_CLIENT_SECRET = os.environ.get("LINKEDIN_CLIENT_SECRET")
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

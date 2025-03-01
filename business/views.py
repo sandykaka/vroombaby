@@ -1,23 +1,20 @@
 import logging
+import urllib
 from datetime import datetime
-
-from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse
-from django.shortcuts import render
+from functools import wraps
 import base64
 import json
 import requests
-from django.http import JsonResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
+from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
-from django.conf import settings
-from .models import ZoomMeeting
-from functools import wraps
-from django.http import JsonResponse
 from firebase_admin import auth as firebase_auth
+
+from website1 import settings
+from .models import ZoomMeeting
 
 logger = logging.getLogger(__name__)
 
-# Create your views here.
 def index(request):
     return render(request, 'business/index.html')
 
@@ -140,7 +137,6 @@ def create_zoom_meeting(request):
 
     return JsonResponse(meeting_details, status=201)
 
-# Optionally, create an endpoint to fetch all meetings.
 @csrf_exempt
 def get_meetings(request):
     if request.method == "GET":
@@ -246,3 +242,81 @@ def update_meeting(request, meeting_id):
     }
 
     return JsonResponse(updated_meeting, status=200)
+
+# ===================== LinkedIn OAuth Endpoints =====================
+
+# Endpoint to handle the LinkedIn callback and fetch user profile information.
+
+@csrf_exempt
+def linkedin_callback(request):
+    # Retrieve the authorization code from LinkedIn's redirect.
+    code = request.GET.get("code")
+    if not code:
+        return JsonResponse({"error": "Missing 'code' parameter from LinkedIn"}, status=400)
+
+    # Exchange the authorization code for an access token.
+    token_url = "https://www.linkedin.com/oauth/v2/accessToken"
+    token_params = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": settings.LINKEDIN_REDIRECT_URI,  # This must match your Authorized Redirect URL.
+        "client_id": settings.LINKEDIN_CLIENT_ID,
+        "client_secret": settings.LINKEDIN_CLIENT_SECRET,
+    }
+    token_response = requests.post(token_url, data=token_params)
+    if token_response.status_code != 200:
+        logger.error("Failed to obtain access token: %s", token_response.text)
+        return JsonResponse({
+            "error": "Failed to obtain access token",
+            "details": token_response.json()
+        }, status=token_response.status_code)
+
+    token_data = token_response.json()
+    access_token = token_data.get("access_token")
+    if not access_token:
+        logger.error("Access token missing in token response: %s", token_data)
+        return JsonResponse({"error": "Access token not found in token response"}, status=400)
+
+    # Fetch the user's profile details using the access token.
+    profile_url = "https://api.linkedin.com/v2/me?projection=(id,localizedFirstName,localizedLastName,headline)"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    profile_response = requests.get(profile_url, headers=headers)
+    if profile_response.status_code != 200:
+        logger.error("Failed to fetch LinkedIn profile: %s", profile_response.text)
+        return JsonResponse({
+            "error": "Failed to fetch LinkedIn profile",
+            "details": profile_response.json()
+        }, status=profile_response.status_code)
+
+    profile_data = profile_response.json()
+    linkedin_id = profile_data.get("id")
+    first_name = profile_data.get("localizedFirstName")
+    last_name = profile_data.get("localizedLastName")
+    headline = profile_data.get("headline")
+    full_name = f"{first_name} {last_name}" if first_name and last_name else ""
+
+    # Store the user's details in Firestore.
+    # try:
+    #     user_doc = {
+    #         "linkedin_id": linkedin_id,
+    #         "full_name": full_name,
+    #         "headline": headline,
+    #         # Optionally store the access token (be cautious with security):
+    #         # "access_token": access_token,
+    #         "updated_at": firestore.SERVER_TIMESTAMP,
+    #     }
+    #     db.collection("linkedin_users").document(linkedin_id).set(user_doc)
+    # except Exception as e:
+    #     logger.exception("Error saving user data to Firestore: %s", e)
+    #     return JsonResponse({"error": "Error saving user data"}, status=500)
+
+    # Redirect back to your iOS app using a custom URL scheme.
+    # Ensure that the scheme (e.g., "yourapp://") is registered in your iOS project.
+    ios_redirect_scheme = "coffeewithexpert://linkedin_callback"
+    query_params = {
+        "full_name": full_name,
+        "title": headline,
+        "linkedin_id": linkedin_id,
+    }
+    redirect_url = ios_redirect_scheme + "?" + urllib.parse.urlencode(query_params)
+    return HttpResponseRedirect(redirect_url)
