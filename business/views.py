@@ -8,6 +8,7 @@ import json
 import requests
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render, redirect
+from django.utils.safestring import mark_safe
 from django.views.decorators.csrf import csrf_exempt
 from firebase_admin import auth as firebase_auth
 
@@ -262,6 +263,24 @@ def linkedin_login(request):
     auth_url = f"https://www.linkedin.com/oauth/v2/authorization?{urllib.parse.urlencode(params)}"
     return redirect(auth_url)
 
+def custom_redirect(url):
+    # Create an HTML page that forces the redirect via meta refresh and JavaScript.
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="0;url={url}">
+  <script type="text/javascript">
+    window.location.href = "{url}";
+  </script>
+  <title>Redirecting…</title>
+</head>
+<body>
+  <p>If you are not redirected automatically, <a href="{url}">click here</a>.</p>
+</body>
+</html>"""
+    # Mark the string as safe so it isn’t processed by the Django template engine.
+    return HttpResponse(mark_safe(html), content_type="text/html")
 
 @csrf_exempt
 def linkedin_callback(request):
@@ -300,7 +319,7 @@ def linkedin_callback(request):
         logger.error("Access token missing in token response: %s", token_data)
         return JsonResponse({"error": "Access token not found in token response"}, status=400)
 
-    # Fetch the user's profile details using the OpenID Connect userinfo endpoint.
+    # Fetch the user's profile details using the access token.
     profile_url = "https://api.linkedin.com/v2/userinfo"
     headers = {"Authorization": f"Bearer {access_token}"}
     profile_response = requests.get(profile_url, headers=headers)
@@ -312,19 +331,17 @@ def linkedin_callback(request):
         }, status=profile_response.status_code)
 
     profile_data = profile_response.json()
-    # Parse standard OIDC claims.
     linkedin_id = profile_data.get("sub")
     full_name = profile_data.get("name", "")
     first_name = profile_data.get("given_name", "")
     last_name = profile_data.get("family_name", "")
-    # Optionally, if LinkedIn provides additional fields like a headline, you can include that.
+    # Optionally, retrieve additional fields like headline if provided.
     headline = profile_data.get("headline", "")
 
-    # If full_name is not provided, construct it from first and last names.
     if not full_name and first_name and last_name:
         full_name = f"{first_name} {last_name}"
 
-    # Redirect back to your iOS app using a custom URL scheme.
+    # Build the custom scheme URL to send back to the iOS app.
     ios_redirect_scheme = "coffeewithexpert://linkedin_callback"
     query_params = {
         "full_name": full_name,
@@ -334,18 +351,3 @@ def linkedin_callback(request):
     redirect_url = ios_redirect_scheme + "?" + urllib.parse.urlencode(query_params)
     return custom_redirect(redirect_url)
 
-def custom_redirect(url):
-    html = f"""
-    <html>
-      <head>
-        <meta http-equiv="refresh" content="0; url={url}">
-        <script type="text/javascript">
-          window.location.href = "{url}";
-        </script>
-      </head>
-      <body>
-        If you are not redirected automatically, <a href="{url}">click here</a>.
-      </body>
-    </html>
-    """
-    return HttpResponse(html)
