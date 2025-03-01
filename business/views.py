@@ -255,11 +255,13 @@ def linkedin_login(request):
         "response_type": "code",
         "client_id": settings.LINKEDIN_CLIENT_ID,
         "redirect_uri": settings.LINKEDIN_REDIRECT_URI,  # e.g., "https://coffeewithexpert.com/linkedin-callback"
-        "scope": "openid profile",  # Updated scopes as per your LinkedIn app authorization
+        # Request the OpenID Connect scopes. You can add additional scopes if needed.
+        "scope": "openid profile email",
         "state": state,
     }
     auth_url = f"https://www.linkedin.com/oauth/v2/authorization?{urllib.parse.urlencode(params)}"
     return redirect(auth_url)
+
 
 @csrf_exempt
 def linkedin_callback(request):
@@ -298,8 +300,8 @@ def linkedin_callback(request):
         logger.error("Access token missing in token response: %s", token_data)
         return JsonResponse({"error": "Access token not found in token response"}, status=400)
 
-    # Fetch the user's profile details using the access token.
-    profile_url = "https://api.linkedin.com/v2/me?projection=(id,localizedFirstName,localizedLastName,headline)"
+    # Fetch the user's profile details using the OpenID Connect userinfo endpoint.
+    profile_url = "https://api.linkedin.com/v2/userinfo"
     headers = {"Authorization": f"Bearer {access_token}"}
     profile_response = requests.get(profile_url, headers=headers)
     if profile_response.status_code != 200:
@@ -310,11 +312,17 @@ def linkedin_callback(request):
         }, status=profile_response.status_code)
 
     profile_data = profile_response.json()
-    linkedin_id = profile_data.get("id")
-    first_name = profile_data.get("localizedFirstName")
-    last_name = profile_data.get("localizedLastName")
-    headline = profile_data.get("headline")
-    full_name = f"{first_name} {last_name}" if first_name and last_name else ""
+    # Parse standard OIDC claims.
+    linkedin_id = profile_data.get("sub")
+    full_name = profile_data.get("name", "")
+    first_name = profile_data.get("given_name", "")
+    last_name = profile_data.get("family_name", "")
+    # Optionally, if LinkedIn provides additional fields like a headline, you can include that.
+    headline = profile_data.get("headline", "")
+
+    # If full_name is not provided, construct it from first and last names.
+    if not full_name and first_name and last_name:
+        full_name = f"{first_name} {last_name}"
 
     # Redirect back to your iOS app using a custom URL scheme.
     ios_redirect_scheme = "coffeewithexpert://linkedin_callback"
