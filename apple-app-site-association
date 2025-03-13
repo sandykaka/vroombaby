@@ -1,0 +1,16 @@
+{
+  "webcredentials": {
+    "apps": [
+      "bleedblue.CoffeeWithExpert"
+    ]
+  },
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "4WKM8GU86V.bleedblue.CoffeeWithExpert",
+        "paths": [ "*" ]
+      }
+    ]
+  }
+}

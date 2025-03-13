@@ -351,3 +351,23 @@ def linkedin_callback(request):
     redirect_url = ios_redirect_scheme + "?" + urllib.parse.urlencode(query_params)
     return custom_redirect(redirect_url)
 
+def apple_app_site_association(request):
+    # Define the AASA content (adjust values as needed)
+    data = {
+        "webcredentials": {
+            "apps": ["bleedblue.CoffeeWithExpert"]
+        },
+        "applinks": {
+            "apps": [],
+            "details": [
+                {
+                    "appID": "4WKM8GU86V.bleedblue.CoffeeWithExpert",
+                    "paths": ["*"]
+                }
+            ]
+        }
+    }
+    # Convert the data to JSON
+    json_data = json.dumps(data)
+    # Return the response with the correct content type
+    return HttpResponse(json_data, content_type="application/json")
