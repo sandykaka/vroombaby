@@ -355,7 +355,7 @@ def apple_app_site_association(request):
     # Define the AASA content (adjust values as needed)
     data = {
         "webcredentials": {
-            "apps": ["bleedblue.CoffeeWithExpert"]
+            "apps": ["4WKM8GU86V.bleedblue.CoffeeWithExpert"]
         },
         "applinks": {
             "apps": [],
