@@ -283,8 +283,10 @@ def custom_redirect(url):
     return HttpResponse(mark_safe(html), content_type="text/html")
 
 @csrf_exempt
+@firebase_login_required
 def linkedin_callback(request):
     logger.info("LinkedIn callback reached with parameters: %s", request.GET.dict())
+    logger.debug("LinkedIn callback reached with parameters: %s", request.GET.dict())
     return JsonResponse({"status": "callback reached", "params": request.GET.dict()})
     # Verify the state parameter to protect against CSRF.
     state_received = request.GET.get("state")
