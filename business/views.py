@@ -319,8 +319,9 @@ def linkedin_callback(request):
         logger.error("Access token missing in token response: %s", token_data)
         return JsonResponse({"error": "Access token not found in token response"}, status=400)
 
-    # Fetch the user's profile details using the access token from the correct endpoint.
-    profile_url = "https://api.linkedin.com/v2/me"
+    # Fetch the user's profile details using the access token.
+    # Added projection to explicitly request id, localizedFirstName, and localizedLastName.
+    profile_url = "https://api.linkedin.com/v2/me?projection=(id,localizedFirstName,localizedLastName)"
     headers = {"Authorization": f"Bearer {access_token}"}
     profile_response = requests.get(profile_url, headers=headers)
     if profile_response.status_code != 200:
@@ -331,15 +332,17 @@ def linkedin_callback(request):
         }, status=profile_response.status_code)
 
     profile_data = profile_response.json()
+    # Debug log the profile data
+    logger.debug("LinkedIn profile data: %s", profile_data)
+
     # Extract user details using the correct field names.
     linkedin_id = profile_data.get("id", "")
     first_name = profile_data.get("localizedFirstName", "")
     last_name = profile_data.get("localizedLastName", "")
     full_name = f"{first_name} {last_name}".strip()
 
-    # LinkedIn's basic profile API may not return a headline by default.
-    # If you need additional details (like a headline), you might need extra permissions or a separate API call.
-    headline = ""
+    # LinkedIn's basic profile API (r_liteprofile) may not return a headline by default.
+    headline = ""  # This remains empty unless you fetch it using additional permissions.
 
     # Build the custom scheme URL to send back to the iOS app.
     ios_redirect_scheme = "coffeewithexpert://linkedin_callback"
