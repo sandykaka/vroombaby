@@ -288,6 +288,8 @@ def custom_redirect(url):
 # @firebase_login_required
 def linkedin_callback(request):
     # Extract the authorization code and state from the query parameters
+    logger.debug("In linkedin callback debug")
+    logger.info("In linkedin callback info")
     code = request.GET.get("code")
     state = request.GET.get("state")
     if not code:
