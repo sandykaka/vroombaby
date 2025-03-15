@@ -284,6 +284,8 @@ def custom_redirect(url):
 
 @csrf_exempt
 def linkedin_callback(request):
+    logger.info("LinkedIn callback reached with parameters: %s", request.GET.dict())
+    return JsonResponse({"status": "callback reached", "params": request.GET.dict()})
     # Verify the state parameter to protect against CSRF.
     state_received = request.GET.get("state")
     state_stored = request.session.pop("linkedin_oauth_state", None)
