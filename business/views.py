@@ -287,21 +287,11 @@ def custom_redirect(url):
 @csrf_exempt
 # @firebase_login_required
 def linkedin_callback(request):
-    print("LinkedIn callback reached with parameters:", request.GET.dict())
-    logger.info("LinkedIn callback reached with parameters: %s", request.GET.dict())
-    logger.debug("LinkedIn callback reached with parameters: %s", request.GET.dict())
-    return JsonResponse({"status": "callback reached", "params": request.GET.dict()})
-    # Verify the state parameter to protect against CSRF.
-    state_received = request.GET.get("state")
-    state_stored = request.session.pop("linkedin_oauth_state", None)
-    if not state_received or not state_stored or state_received != state_stored:
-        logger.error("Invalid state parameter: received %s, expected %s", state_received, state_stored)
-        return JsonResponse({"error": "Invalid state parameter"}, status=400)
-
-    # Retrieve the authorization code from LinkedIn's redirect.
+    # Extract code and state from query parameters
     code = request.GET.get("code")
-    if not code:
-        return JsonResponse({"error": "Missing 'code' parameter from LinkedIn"}, status=400)
+    state = request.GET.get("state")
+    print("LinkedIn callback received code and state:", code, state)
+    logger.info("LinkedIn callback received code and state: %s, %s", code, state)
 
     # Exchange the authorization code for an access token.
     token_url = "https://www.linkedin.com/oauth/v2/accessToken"
@@ -315,51 +305,40 @@ def linkedin_callback(request):
     token_response = requests.post(token_url, data=token_params)
     if token_response.status_code != 200:
         logger.error("Failed to obtain access token: %s", token_response.text)
-        return JsonResponse({
-            "error": "Failed to obtain access token",
-            "details": token_response.json()
-        }, status=token_response.status_code)
+        return JsonResponse({"error": "Failed to obtain access token"}, status=400)
 
     token_data = token_response.json()
     access_token = token_data.get("access_token")
     if not access_token:
-        logger.error("Access token missing in token response: %s", token_data)
-        return JsonResponse({"error": "Access token not found in token response"}, status=400)
+        logger.error("Access token not found in token response: %s", token_data)
+        return JsonResponse({"error": "Access token not found"}, status=400)
 
     # Fetch the user's profile details using the access token.
-    # Added projection to explicitly request id, localizedFirstName, and localizedLastName.
     profile_url = "https://api.linkedin.com/v2/me?projection=(id,localizedFirstName,localizedLastName)"
     headers = {"Authorization": f"Bearer {access_token}"}
     profile_response = requests.get(profile_url, headers=headers)
     if profile_response.status_code != 200:
         logger.error("Failed to fetch LinkedIn profile: %s", profile_response.text)
-        return JsonResponse({
-            "error": "Failed to fetch LinkedIn profile",
-            "details": profile_response.json()
-        }, status=profile_response.status_code)
+        return JsonResponse({"error": "Failed to fetch LinkedIn profile"}, status=400)
 
     profile_data = profile_response.json()
-    # Debug log the profile data
-    logger.debug("LinkedIn profile data: %s", profile_data)
-
-    # Extract user details using the correct field names.
     linkedin_id = profile_data.get("id", "")
     first_name = profile_data.get("localizedFirstName", "")
     last_name = profile_data.get("localizedLastName", "")
     full_name = f"{first_name} {last_name}".strip()
 
-    # LinkedIn's basic profile API (r_liteprofile) may not return a headline by default.
-    headline = ""  # This remains empty unless you fetch it using additional permissions.
-
-    # Build the custom scheme URL to send back to the iOS app.
-    ios_redirect_scheme = "coffeewithexpert://linkedin_callback"
-    query_params = {
-        "full_name": full_name,
-        "title": headline,
-        "linkedin_id": linkedin_id,
-    }
-    redirect_url = ios_redirect_scheme + "?" + urllib.parse.urlencode(query_params)
-    return custom_redirect(redirect_url)
+    # For debugging: return the fetched details
+    logger.info("Fetched LinkedIn details: full_name=%s, linkedin_id=%s", full_name, linkedin_id)
+    return JsonResponse({
+        "status": "callback reached",
+        "params": {
+            "code": code,
+            "state": state,
+            "full_name": full_name,
+            "linkedin_id": linkedin_id
+            # 'title': title,   # Omitted since title isn't fetched by default.
+        }
+    })
 
 def apple_app_site_association(request):
     # Define the AASA content (adjust values as needed)
