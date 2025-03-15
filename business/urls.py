@@ -17,5 +17,6 @@ urlpatterns = [
     path('linkedin-login/', views.linkedin_login, name='linkedin_login'),
     path('linkedin-callback/', views.linkedin_callback, name='linkedin_callback'),
     path('apple-app-site-association', views.apple_app_site_association, name='apple_app_site_association'),
+    path('.well-known/apple-app-site-association', views.apple_app_site_association, name='apple_app_site_association'),
 
 ]
