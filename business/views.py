@@ -249,6 +249,7 @@ def update_meeting(request, meeting_id):
 
 def linkedin_login(request):
     # Generate a secure random state token for CSRF protection.
+    logger.debug("LinkedIn login method")
     state = secrets.token_urlsafe(16)
     request.session["linkedin_oauth_state"] = state
 
@@ -261,6 +262,7 @@ def linkedin_login(request):
         "state": state,
     }
     auth_url = f"https://www.linkedin.com/oauth/v2/authorization?{urllib.parse.urlencode(params)}"
+    logger.debug("LinkedIn login url: %s", auth_url)
     return redirect(auth_url)
 
 def custom_redirect(url):
