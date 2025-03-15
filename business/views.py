@@ -283,7 +283,7 @@ def custom_redirect(url):
     return HttpResponse(mark_safe(html), content_type="text/html")
 
 @csrf_exempt
-@firebase_login_required
+# @firebase_login_required
 def linkedin_callback(request):
     print("LinkedIn callback reached with parameters:", request.GET.dict())
     logger.info("LinkedIn callback reached with parameters: %s", request.GET.dict())
