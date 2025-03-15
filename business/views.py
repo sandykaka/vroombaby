@@ -287,11 +287,12 @@ def custom_redirect(url):
 @csrf_exempt
 # @firebase_login_required
 def linkedin_callback(request):
-    # Extract code and state from query parameters
+    # Extract the authorization code and state from the query parameters
     code = request.GET.get("code")
     state = request.GET.get("state")
-    print("LinkedIn callback received code and state:", code, state)
-    logger.info("LinkedIn callback received code and state: %s, %s", code, state)
+    if not code:
+        logger.error("Missing authorization code in callback")
+        return JsonResponse({"error": "Missing authorization code"}, status=400)
 
     # Exchange the authorization code for an access token.
     token_url = "https://www.linkedin.com/oauth/v2/accessToken"
@@ -305,7 +306,10 @@ def linkedin_callback(request):
     token_response = requests.post(token_url, data=token_params)
     if token_response.status_code != 200:
         logger.error("Failed to obtain access token: %s", token_response.text)
-        return JsonResponse({"error": "Failed to obtain access token"}, status=400)
+        return JsonResponse({
+            "error": "Failed to obtain access token",
+            "details": token_response.json()
+        }, status=token_response.status_code)
 
     token_data = token_response.json()
     access_token = token_data.get("access_token")
@@ -313,13 +317,17 @@ def linkedin_callback(request):
         logger.error("Access token not found in token response: %s", token_data)
         return JsonResponse({"error": "Access token not found"}, status=400)
 
-    # Fetch the user's profile details using the access token.
+    # Fetch the user's profile using the access token.
+    # We use a projection to request the id, localizedFirstName, and localizedLastName.
     profile_url = "https://api.linkedin.com/v2/me?projection=(id,localizedFirstName,localizedLastName)"
     headers = {"Authorization": f"Bearer {access_token}"}
     profile_response = requests.get(profile_url, headers=headers)
     if profile_response.status_code != 200:
         logger.error("Failed to fetch LinkedIn profile: %s", profile_response.text)
-        return JsonResponse({"error": "Failed to fetch LinkedIn profile"}, status=400)
+        return JsonResponse({
+            "error": "Failed to fetch LinkedIn profile",
+            "details": profile_response.json()
+        }, status=profile_response.status_code)
 
     profile_data = profile_response.json()
     linkedin_id = profile_data.get("id", "")
@@ -327,18 +335,20 @@ def linkedin_callback(request):
     last_name = profile_data.get("localizedLastName", "")
     full_name = f"{first_name} {last_name}".strip()
 
-    # For debugging: return the fetched details
-    logger.info("Fetched LinkedIn details: full_name=%s, linkedin_id=%s", full_name, linkedin_id)
-    return JsonResponse({
-        "status": "callback reached",
-        "params": {
-            "code": code,
-            "state": state,
-            "full_name": full_name,
-            "linkedin_id": linkedin_id
-            # 'title': title,   # Omitted since title isn't fetched by default.
-        }
-    })
+    # (Optional) If you need the user's email, LinkedIn requires a separate API call.
+    # See LinkedIn's documentation for details.
+
+    # Build a custom URL to redirect back to your iOS app.
+    ios_redirect_scheme = "coffeewithexpert://linkedin_callback"
+    query_params = {
+        "full_name": full_name,
+        "linkedin_id": linkedin_id,
+        # Add additional details as needed.
+    }
+    redirect_url = ios_redirect_scheme + "?" + urllib.parse.urlencode(query_params)
+    logger.info("Redirecting to: %s", redirect_url)
+
+    return HttpResponseRedirect(redirect_url)
 
 def apple_app_site_association(request):
     # Define the AASA content (adjust values as needed)
