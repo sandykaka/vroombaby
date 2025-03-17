@@ -10,6 +10,7 @@ class ZoomMeeting(models.Model):
     host_name = models.CharField(max_length=255, null=True, blank=True)
     host_email = models.EmailField(null=True, blank=True)
     linkedin_profile_url = models.URLField(null=True, blank=True)
+    linkedin_profile_picture = models.URLField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.topic} at {self.start_time}"
