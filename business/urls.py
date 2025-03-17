@@ -16,7 +16,7 @@ urlpatterns = [
     path('update-meeting/<int:meeting_id>/', views.update_meeting, name='update_meeting'),
     path('linkedin-login/', views.linkedin_login, name='linkedin_login'),
     path('linkedin-callback', views.linkedin_callback, name='linkedin_callback'),
+    path('get-user-linkedin-details/', views.get_user_linkedin_details, name='get_user_linkedin_details'),
     path('apple-app-site-association', views.apple_app_site_association, name='apple_app_site_association'),
     path('.well-known/apple-app-site-association', views.apple_app_site_association, name='apple_app_site_association'),
-
 ]

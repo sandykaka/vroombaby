@@ -378,3 +378,40 @@ def apple_app_site_association(request):
     json_data = json.dumps(data)
     # Return the response with the correct content type
     return HttpResponse(json_data, content_type="application/json")
+
+@csrf_exempt
+@firebase_login_required
+def get_user_linkedin_details(request):
+    """
+    Returns LinkedIn details (host_name, linkedin_profile_url, linkedin_profile_picture)
+    for the currently authenticated user, based on the most recent meeting record.
+    """
+    if request.method != "GET":
+        return JsonResponse({"error": "Only GET method is allowed."}, status=405)
+
+    user_email = request.firebase_user.get("email")
+    if not user_email:
+        return JsonResponse({"error": "User email not found."}, status=400)
+
+    # Query for meetings associated with this user's email, ordered by start_time descending.
+    meetings = ZoomMeeting.objects.filter(host_email=user_email).order_by("-start_time")
+    if meetings.exists():
+        meeting = meetings.first()
+        data = {
+            "topic": meeting.topic or "",
+            "host_name": meeting.host_name or "",
+            "linkedin_profile_url": meeting.linkedin_profile_url or "",
+            "linkedin_profile_picture": meeting.linkedin_profile_picture or "",
+        }
+        logger.debug("Returning LinkedIn details: %s", data)
+        return JsonResponse(data, status=200)
+    else:
+        # No meeting record exists; return empty strings.
+        data = {
+            "topic": "",
+            "host_name": "",
+            "linkedin_profile_url": "",
+            "linkedin_profile_picture": "",
+        }
+        logger.debug("No LinkedIn details found for user %s", user_email)
+        return JsonResponse(data, status=200)
