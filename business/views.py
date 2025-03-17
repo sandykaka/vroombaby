@@ -79,6 +79,8 @@ def create_zoom_meeting(request):
     # Use the authenticated user's email from firebase_token instead of request.user.email.
     host_email = request.firebase_user.get("email", "No host email")
     linkedin_profile_url = data.get("linkedin_profile_url", "No linkedin url")
+    linkedin_profile_picture = data.get("linkedin_profile_picture", "No linkedin picture")
+    linkedin_title = data.get("linkedin_title", "No linkedin title")
 
     if not start_time:
         return JsonResponse({"error": "Missing required field: start_time."}, status=400)
@@ -115,12 +117,13 @@ def create_zoom_meeting(request):
         }, status=response.status_code)
 
     meeting_details = response.json()
-    # Override the meeting details with our host values.
+    # Override meeting details with our host and LinkedIn values.
     meeting_details["host_name"] = host_name
     meeting_details["host_email"] = host_email
     meeting_details["linkedin_profile_url"] = linkedin_profile_url
+    meeting_details["linkedin_profile_picture"] = linkedin_profile_picture
+    meeting_details["linkedin_title"] = linkedin_title
 
-    # Parse the start_time string into a Python datetime.
     try:
         dt = datetime.fromisoformat(meeting_details["start_time"].replace("Z", "+00:00"))
     except Exception as e:
@@ -134,7 +137,9 @@ def create_zoom_meeting(request):
         duration=meeting_details.get("duration", duration),
         host_name=meeting_details.get("host_name"),
         host_email=meeting_details.get("host_email"),
-        linkedin_profile_url=meeting_details.get("linkedin_profile_url")
+        linkedin_profile_url=meeting_details.get("linkedin_profile_url"),
+        linkedin_profile_picture=meeting_details.get("linkedin_profile_picture"),
+        linkedin_title=meeting_details.get("linkedin_title")
     )
 
     return JsonResponse(meeting_details, status=201)
