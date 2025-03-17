@@ -80,7 +80,6 @@ def create_zoom_meeting(request):
     host_email = request.firebase_user.get("email", "No host email")
     linkedin_profile_url = data.get("linkedin_profile_url", "No linkedin url")
     linkedin_profile_picture = data.get("linkedin_profile_picture", "No linkedin picture")
-    linkedin_title = data.get("linkedin_title", "No linkedin title")
 
     if not start_time:
         return JsonResponse({"error": "Missing required field: start_time."}, status=400)
@@ -122,7 +121,6 @@ def create_zoom_meeting(request):
     meeting_details["host_email"] = host_email
     meeting_details["linkedin_profile_url"] = linkedin_profile_url
     meeting_details["linkedin_profile_picture"] = linkedin_profile_picture
-    meeting_details["linkedin_title"] = linkedin_title
 
     try:
         dt = datetime.fromisoformat(meeting_details["start_time"].replace("Z", "+00:00"))
@@ -138,8 +136,7 @@ def create_zoom_meeting(request):
         host_name=meeting_details.get("host_name"),
         host_email=meeting_details.get("host_email"),
         linkedin_profile_url=meeting_details.get("linkedin_profile_url"),
-        linkedin_profile_picture=meeting_details.get("linkedin_profile_picture"),
-        linkedin_title=meeting_details.get("linkedin_title")
+        linkedin_profile_picture=meeting_details.get("linkedin_profile_picture")
     )
 
     return JsonResponse(meeting_details, status=201)
@@ -165,6 +162,7 @@ def get_meetings(request):
                 "host_name": meeting.host_name,
                 "host_email": meeting.host_email,
                 "linkedin_profile_url": meeting.linkedin_profile_url,
+                "linkedin_profile_picture": meeting.linkedin_profile_picture,
             })
         return JsonResponse({"meetings": meeting_list}, status=200)
     else:
@@ -234,6 +232,8 @@ def update_meeting(request, meeting_id):
         meeting.host_name = data["host_name"]
     if "linkedin_profile_url" in data:
         meeting.linkedin_profile_url = data["linkedin_profile_url"]
+    if "linkedin_profile_picture" in data:
+        meeting.linkedin_profile_picture = data["linkedin_profile_picture"]
 
     meeting.save()
 
@@ -246,6 +246,7 @@ def update_meeting(request, meeting_id):
         "host_name": meeting.host_name,
         "host_email": meeting.host_email,
         "linkedin_profile_url": meeting.linkedin_profile_url,
+        "linkedin_profile_picture": meeting.linkedin_profile_picture,
     }
 
     return JsonResponse(updated_meeting, status=200)
