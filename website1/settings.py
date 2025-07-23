@@ -11,6 +11,10 @@ https://docs.djangoproject.com/en/2.1/ref/settings/
 """
 
 import os
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -23,10 +27,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECRET_KEY = ')1x1+(1p0x*=8_0lfcn8^6!*#6ri-9zavxi14@nyug%!pa5k0m'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'www.vroombaby.com', 'vroombaby.com', '44.214.122.27', '172.26.12.62',
-                 'www.schoolconvo.com', 'schoolconvo.com']
+                 'www.schoolconvo.com', 'schoolconvo.com', 'www.coffeewithexpert.com', 'coffeewithexpert.com']
 # ALLOWED_HOSTS = []
 
 
@@ -106,6 +110,9 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+]
 
 # Internationalization
 # https://docs.djangoproject.com/en/2.1/topics/i18n/
@@ -135,3 +142,45 @@ X_FRAME_OPTIONS = "ALLOW-FROM https://ws-na.amazon-adsystem.com/"
 SECURE_SSL_REDIRECT = False  # NGINX handles this
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+ZOOM_CLIENT_ID = os.environ.get("ZOOM_CLIENT_ID")
+ZOOM_CLIENT_SECRET = os.environ.get("ZOOM_CLIENT_SECRET")
+ZOOM_ACCOUNT_ID = os.environ.get("ZOOM_ACCOUNT_ID")
+
+LOGIN_URL = '/login/'
+LOGOUT_URL = '/logout/'
+
+LINKEDIN_REDIRECT_URI = os.environ.get("LINKEDIN_REDIRECT_URI")
+LINKEDIN_CLIENT_ID = os.environ.get("LINKEDIN_CLIENT_ID")
+LINKEDIN_CLIENT_SECRET = os.environ.get("LINKEDIN_CLIENT_SECRET")
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+        # Optionally add file handlers:
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': '/home/ubuntu/vroombaby/logs/django_error.log',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+        },
+        'website1': {  # Replace 'your_app' with your app's name.
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'business': {  # Replace 'your_app' with your app's name.
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+    },
+}
