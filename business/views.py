@@ -15,6 +15,14 @@ from firebase_admin import auth as firebase_auth
 from website1 import settings
 from .models import ZoomMeeting
 
+import os
+import googlemaps
+import openai
+
+from django.conf     import settings
+from django.http     import JsonResponse, HttpResponseBadRequest
+from django.views.decorators.http import require_GET
+
 logger = logging.getLogger(__name__)
 
 def index(request):
@@ -415,3 +423,59 @@ def get_user_linkedin_details(request):
         }
         logger.debug("No LinkedIn details found for user %s", user_email)
         return JsonResponse(data, status=200)
+
+
+# initialize clients
+gmaps = googlemaps.Client(key=settings.GOOGLE_API_KEY)
+openai.api_key = settings.OPENAI_API_KEY
+
+
+@require_GET
+def restaurant_recommendations(request):
+    place_id = request.GET.get("place_id")
+    ethnicity = request.GET.get("ethnicity")
+    if not place_id or not ethnicity:
+        return HttpResponseBadRequest("Missing place_id or ethnicity")
+
+    # 1) Fetch name + up to 5 reviews
+    details = gmaps.place(
+        place_id=place_id,
+        fields=["name", "reviews"]
+    )
+    result = details.get("result", {})
+    name = result.get("name", "")
+    reviews = result.get("reviews", [])[:5]
+    snippets = [r.get("text", "") for r in reviews]
+
+    # 2) Build prompt
+    prompt = f"""Restaurant: {name}
+Reviewer Ethnicity: {ethnicity}
+
+Here are some review snippets:
+{chr(10).join(f"- {s}" for s in snippets)}
+
+Of those, only consider the ones by {ethnicity} reviewers (by name),
+and list the top 5 dishes that those {ethnicity} reviewers most highly recommend.
+Respond with a JSON array of objects, each like {{ "name": "Pad Thai" }}.
+"""
+
+    # 3) Call OpenAI
+    try:
+        resp = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+        )
+        content = resp.choices[0].message.content.strip()
+        import json
+        dishes = json.loads(content)
+        if not isinstance(dishes, list):
+            raise ValueError("Expected a JSON list")
+    except Exception as e:
+        return JsonResponse(
+            {"error": f"AI service failed: {e}"},
+            status=502
+        )
+
+    # 4) Return JSON
+    return JsonResponse({"dishes": dishes})

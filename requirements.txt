@@ -1,3 +1,5 @@
 Django
 requests
 firebase-admin
+googlemaps
+openai

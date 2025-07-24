@@ -19,4 +19,6 @@ urlpatterns = [
     path('get-user-linkedin-details/', views.get_user_linkedin_details, name='get_user_linkedin_details'),
     path('apple-app-site-association', views.apple_app_site_association, name='apple_app_site_association'),
     path('.well-known/apple-app-site-association', views.apple_app_site_association, name='apple_app_site_association'),
+    path("restaurant-recommendations/", views.restaurant_recommendations, name="restaurant_recommendations"),
+
 ]
