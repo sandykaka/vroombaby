@@ -461,7 +461,7 @@ Respond with a JSON array of objects, each like {{ "name": "Pad Thai" }}.
     # 3) Call the new 1.x Chat Completions API
     try:
         resp = client.chat.completions.create(    # ← new style
-            model="gpt-4",
+            model="gpt-3.5-turbo",
             messages=[{"role":"user", "content":prompt}],
             temperature=0.7,
         )
