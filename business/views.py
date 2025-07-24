@@ -17,8 +17,7 @@ from .models import ZoomMeeting
 
 import os
 import googlemaps
-import openai
-
+from openai import OpenAI
 from django.conf     import settings
 from django.http     import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_GET
@@ -427,7 +426,7 @@ def get_user_linkedin_details(request):
 
 # initialize clients
 gmaps = googlemaps.Client(key=settings.GOOGLE_API_KEY)
-openai.api_key = settings.OPENAI_API_KEY
+client  = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 @require_GET
@@ -459,18 +458,15 @@ and list the top 5 dishes that those {ethnicity} reviewers most highly recommend
 Respond with a JSON array of objects, each like {{ "name": "Pad Thai" }}.
 """
 
-    # 3) Call OpenAI
+    # 3) Call the new 1.x Chat Completions API
     try:
-        resp = openai.ChatCompletion.create(
+        resp = client.chat.completions.create(    # ← new style
             model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role":"user", "content":prompt}],
             temperature=0.7,
         )
-        content = resp.choices[0].message.content.strip()
-        import json
-        dishes = json.loads(content)
-        if not isinstance(dishes, list):
-            raise ValueError("Expected a JSON list")
+        text = resp.choices[0].message.content
+        dishes = json.loads(text)
     except Exception as e:
         return JsonResponse(
             {"error": f"AI service failed: {e}"},
