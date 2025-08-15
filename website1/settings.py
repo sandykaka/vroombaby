@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/2.1/ref/settings/
 import os
 from dotenv import load_dotenv
 
+from pathlib import Path
+
 # Load .env file
 load_dotenv()
 
@@ -27,7 +29,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECRET_KEY = ')1x1+(1p0x*=8_0lfcn8^6!*#6ri-9zavxi14@nyug%!pa5k0m'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'www.vroombaby.com', 'vroombaby.com', '44.214.122.27', '172.26.12.62',
                  'www.schoolconvo.com', 'schoolconvo.com', 'www.coffeewithexpert.com', 'coffeewithexpert.com']
@@ -156,6 +158,21 @@ LINKEDIN_CLIENT_SECRET = os.environ.get("LINKEDIN_CLIENT_SECRET")
 
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Put cached artifacts under BASE_DIR/var/reviews by default
+REVIEWS_CACHE_DIR = BASE_DIR / "var" / "reviews"
+
+# App-level memory cache (used for quick response caching)
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "reviews-endpoint-cache",
+    }
+}
+
+AUTHORS_CSV = BASE_DIR / "data" / "authors.csv"
 
 LOGGING = {
     'version': 1,

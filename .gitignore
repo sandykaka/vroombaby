@@ -71,3 +71,4 @@ ENV/
 *.iml
 
 .envrc
+/var/reviews/

@@ -15,13 +15,14 @@ from firebase_admin import auth as firebase_auth
 from website1 import settings
 from .models import ZoomMeeting
 
-import os
 import googlemaps
 from openai import OpenAI
 from django.conf     import settings
 from django.http     import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_GET
-
+from .utils.reviews_cache import dish_csv_path, is_stale, ensure_csv_async, generate_csv_blocking
+from django.core.cache import cache
+import pandas as pd
 logger = logging.getLogger(__name__)
 
 def index(request):
@@ -427,7 +428,7 @@ def get_user_linkedin_details(request):
 # initialize clients
 gmaps = googlemaps.Client(key=settings.GOOGLE_API_KEY)
 client  = OpenAI(api_key=settings.OPENAI_API_KEY)
-
+TABS = {"indian","american","chinese","mexican","italian"}
 
 @require_GET
 def restaurant_recommendations(request):
@@ -436,42 +437,63 @@ def restaurant_recommendations(request):
     if not place_id or not ethnicity:
         return HttpResponseBadRequest("Missing place_id or ethnicity")
 
-    # 1) Fetch name + up to 5 reviews
-    details = gmaps.place(
-        place_id=place_id,
-        fields=["name", "reviews"]
-    )
-    result = details.get("result", {})
-    name = result.get("name", "")
-    reviews = result.get("reviews", [])[:5]
-    snippets = [r.get("text", "") for r in reviews]
+    eth = ethnicity.strip().lower()
+    if eth not in TABS:
+        return HttpResponseBadRequest("Invalid ethnicity")
 
-    # 2) Build prompt
-    prompt = f"""Restaurant: {name}
-Reviewer Ethnicity: {ethnicity}
+    csv_path = dish_csv_path(place_id)
 
-Here are some review snippets:
-{chr(10).join(f"- {s}" for s in snippets)}
+    # 1) Cold cache: compute once if missing
+    if not csv_path.exists():
+        try:
+            generate_csv_blocking(place_id)
+        except Exception as e:
+            return JsonResponse({"dishes": [], "error": f"generate failed: {e}"}, status=500)
 
-Of those, only consider the ones by {ethnicity} reviewers (by name),
-and list the top 5 dishes that those {ethnicity} reviewers most highly recommend.
-Respond with a JSON array of objects, each like {{ "name": "Pad Thai" }}.
-"""
+    # 2) Warm cache: serve now; refresh in background if stale
+    if is_stale(csv_path):
+        ensure_csv_async(place_id)
 
-    # 3) Call the new 1.x Chat Completions API
+    # 3) App-level response cache (fast, short TTL). Include CSV mtime in the key.
     try:
-        resp = client.chat.completions.create(    # ← new style
-            model="gpt-3.5-turbo",
-            messages=[{"role":"user", "content":prompt}],
-            temperature=0.7,
-        )
-        text = resp.choices[0].message.content
-        dishes = json.loads(text)
-    except Exception as e:
-        return JsonResponse(
-            {"error": f"AI service failed: {e}"},
-            status=502
-        )
+        mtime = int(csv_path.stat().st_mtime)
+    except Exception:
+        mtime = 0
+    cache_key = f"rr:{place_id}:{eth}:{mtime}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return JsonResponse(cached)
 
-    # 4) Return JSON
-    return JsonResponse({"dishes": dishes})
+    # 4) Read and filter the cached CSV
+    try:
+        df = pd.read_csv(csv_path, dtype={"ethnicity_ui":"string","dish":"string"})
+    except Exception as e:
+        return JsonResponse({"dishes": [], "error": f"read failed: {e}"}, status=500)
+
+    if df.empty:
+        payload = {"place_id": place_id, "ethnicity": eth, "dishes": []}
+        cache.set(cache_key, payload, timeout=300)
+        return JsonResponse(payload)
+
+    sub = df[df["ethnicity_ui"].str.lower() == eth]
+    if sub.empty:
+        payload = {"place_id": place_id, "ethnicity": eth, "dishes": []}
+        cache.set(cache_key, payload, timeout=300)
+        return JsonResponse(payload)
+
+    sub = sub.sort_values(
+        ["mentions", "unique_authors", "dish"],
+        ascending=[False, False, True]
+    ).head(5)
+
+    dishes = [{
+        "name": str(r["dish"]),
+        "people": int(r["unique_authors"]) if pd.notna(r["unique_authors"]) else 0,
+        "mentions": int(r["mentions"]) if pd.notna(r["mentions"]) else 0,
+        "from_recommended": bool(r["from_recommended"]) if pd.notna(r["from_recommended"]) else False,
+    } for _, r in sub.iterrows()]
+
+    payload = {"place_id": place_id, "ethnicity": eth, "dishes": dishes}
+    cache.set(cache_key, payload, timeout=300)  # 5 minutes
+    return JsonResponse(payload)
+
