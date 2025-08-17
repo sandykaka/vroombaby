@@ -98,6 +98,13 @@ class Command(BaseCommand):
                                    time_budget=time_budget,
                                    out_dir=out_dir))
 
+        place_dir = Path(settings.REVIEWS_CACHE_DIR) / place_id
+        lock = place_dir / ".refresh.lock"
+        try:
+            lock.unlink(missing_ok=True)
+        except Exception:
+            pass
+
 def _norm_text(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
 

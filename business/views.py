@@ -502,8 +502,7 @@ def restaurant_recommendations(request):
         "from_recommended": bool(r["from_recommended"]) if pd.notna(r["from_recommended"]) else False,
     } for _, r in sub.iterrows()]
 
-    partial = is_stale(csv_path)  # crude but fine as a signal
-    payload = {"dishes": dishes, "partial": partial}
+    payload = {"dishes": dishes, "partial": is_stale(csv_path)}
 
     cache.set(cache_key, payload, timeout=300)  # 5 minutes
     return JsonResponse(payload)
