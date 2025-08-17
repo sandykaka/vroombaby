@@ -1,12 +1,22 @@
 # business/reviews_cache.py
 from __future__ import annotations
 import os
+import sys
 from pathlib import Path
 from datetime import datetime, timedelta
+from subprocess import Popen
+
 from django.conf import settings
 from django.core.management import call_command
 
 TTL = timedelta(days=7)  # how long a CSV is considered “fresh”
+FAST_TARGET = 40
+FAST_BUDGET = 12
+FULL_TARGET = 200
+
+def _manage_py() -> str:
+    # path to manage.py
+    return str(Path(settings.BASE_DIR) / "manage.py")
 
 def cache_base() -> Path:
     base = Path(getattr(settings, "REVIEWS_CACHE_DIR", Path(settings.BASE_DIR) / "var" / "reviews"))
@@ -30,18 +40,32 @@ def is_stale(p: Path) -> bool:
 
 def ensure_csv_async(place_id: str):
     """
-    Hook for background refresh (Celery/Huey/RQ). Non-blocking.
-    For now, it’s a stub.
+    Fire-and-forget full scrape (200 reviews). Uses the same venv/python
+    as the running process. Safe to call even if one is already running.
     """
-    # Example with Celery:
-    # from .tasks import recompute_dish_mentions
-    # recompute_dish_mentions.delay(place_id)
-    pass
+    py = sys.executable
+    env = os.environ.copy()
+    # Make sure Playwright uses the same browser cache path as your service:
+    env.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.environ.get("PLAYWRIGHT_BROWSERS_PATH", ""))
+    env.setdefault("PLAYWRIGHT_NO_SANDBOX", "1")
+    Popen(
+        [py, _manage_py(), "scrape_reviews", "--place_id", place_id,
+         "--target", str(FULL_TARGET), "--time_budget", "0"],
+        cwd=str(Path(settings.BASE_DIR)),
+        env=env,
+        stdout=open(os.devnull, "wb"),
+        stderr=open(os.devnull, "wb"),
+    )
 
-def generate_csv_blocking(place_id: str) -> Path:
+def generate_csv_blocking(place_id: str, fast:bool = True) -> Path:
     outdir = Path(getattr(settings, "REVIEWS_CACHE_DIR",
                           Path(settings.BASE_DIR) / "var" / "reviews")) / place_id
     outdir.mkdir(parents=True, exist_ok=True)
     # call your command and tell it where to write
-    call_command("scrape_reviews", place_id=place_id, out_dir=str(outdir))
+    args = ["scrape_reviews", "--place_id", place_id]
+    if fast:
+        args.append("--fast")
+    else:
+        args += ["--target", str(FULL_TARGET), "--time_budget", "0"]
+    call_command(*args)
     return outdir / "dish_mentions.csv"

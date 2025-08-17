@@ -174,33 +174,33 @@ CACHES = {
 
 AUTHORS_CSV = BASE_DIR / "data" / "authors.csv"
 
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-        },
-        # Optionally add file handlers:
-        'file': {
-            'class': 'logging.FileHandler',
-            'filename': '/home/ubuntu/vroombaby/logs/django_error.log',
-        },
-    },
-    'loggers': {
-        'django': {
-            'handlers': ['console', 'file'],
-            'level': 'DEBUG',
-        },
-        'website1': {  # Replace 'your_app' with your app's name.
-            'handlers': ['console', 'file'],
-            'level': 'DEBUG',
-            'propagate': True,
-        },
-        'business': {  # Replace 'your_app' with your app's name.
-            'handlers': ['console', 'file'],
-            'level': 'DEBUG',
-            'propagate': True,
-        },
-    },
-}
+# LOGGING = {
+#     'version': 1,
+#     'disable_existing_loggers': False,
+#     'handlers': {
+#         'console': {
+#             'class': 'logging.StreamHandler',
+#         },
+#         # Optionally add file handlers:
+#         'file': {
+#             'class': 'logging.FileHandler',
+#             'filename': '/home/ubuntu/vroombaby/logs/django_error.log',
+#         },
+#     },
+#     'loggers': {
+#         'django': {
+#             'handlers': ['console', 'file'],
+#             'level': 'DEBUG',
+#         },
+#         'website1': {  # Replace 'your_app' with your app's name.
+#             'handlers': ['console', 'file'],
+#             'level': 'DEBUG',
+#             'propagate': True,
+#         },
+#         'business': {  # Replace 'your_app' with your app's name.
+#             'handlers': ['console', 'file'],
+#             'level': 'DEBUG',
+#             'propagate': True,
+#         },
+#     },
+# }

@@ -446,9 +446,11 @@ def restaurant_recommendations(request):
     # 1) Cold cache: compute once if missing
     if not csv_path.exists():
         try:
-            generate_csv_blocking(place_id)
+            generate_csv_blocking(place_id, fast=True)   # ~40 reviews ≤12s
         except Exception as e:
             return JsonResponse({"dishes": [], "error": f"generate failed: {e}"}, status=500)
+        # Immediately kick off deep scrape for next time
+        ensure_csv_async(place_id)
 
     # 2) Warm cache: serve now; refresh in background if stale
     if is_stale(csv_path):
@@ -464,20 +466,27 @@ def restaurant_recommendations(request):
     if cached is not None:
         return JsonResponse(cached)
 
+    # 3) Read + short app cache (your existing code)
+    try:
+        mtime = int(csv_path.stat().st_mtime)
+    except Exception:
+        mtime = 0
+    cache_key = f"rr:{place_id}:{eth}:{mtime}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return JsonResponse(cached)
+
     # 4) Read and filter the cached CSV
     try:
         df = pd.read_csv(csv_path, dtype={"ethnicity_ui":"string","dish":"string"})
     except Exception as e:
         return JsonResponse({"dishes": [], "error": f"read failed: {e}"}, status=500)
 
-    if df.empty:
-        payload = {"place_id": place_id, "ethnicity": eth, "dishes": []}
-        cache.set(cache_key, payload, timeout=300)
-        return JsonResponse(payload)
-
     sub = df[df["ethnicity_ui"].str.lower() == eth]
-    if sub.empty:
-        payload = {"place_id": place_id, "ethnicity": eth, "dishes": []}
+
+    # empty cases
+    if df.empty or sub.empty:
+        payload = {"dishes": [], "partial": True}  # likely fast pass or no data
         cache.set(cache_key, payload, timeout=300)
         return JsonResponse(payload)
 
@@ -493,7 +502,9 @@ def restaurant_recommendations(request):
         "from_recommended": bool(r["from_recommended"]) if pd.notna(r["from_recommended"]) else False,
     } for _, r in sub.iterrows()]
 
-    payload = {"place_id": place_id, "ethnicity": eth, "dishes": dishes}
+    partial = is_stale(csv_path)  # crude but fine as a signal
+    payload = {"dishes": dishes, "partial": partial}
+
     cache.set(cache_key, payload, timeout=300)  # 5 minutes
     return JsonResponse(payload)
 

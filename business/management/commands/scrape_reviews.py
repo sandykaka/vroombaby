@@ -51,11 +51,21 @@ class Command(BaseCommand):
             required=True,
             help="The Google Maps Place ID to scrape reviews for."
         )
+        parser.add_argument("--target", type=int, default=30,
+                            help="Target number of reviews to collect.")
+        parser.add_argument("--time_budget", type=int, default=0,
+                            help="Hard time budget in seconds (0 = no cap).")
+        parser.add_argument("--fast", action="store_true",
+                            help="Shortcut for --target=40 --time_budget=12")
 
         parser.add_argument("--out-dir", default=None, help="Output directory for reviews/authors/dish files")
 
     def handle(self, *args, **options):
         place_id = options["place_id"]
+        target = options["target"]
+        time_budget = options["time_budget"]
+        if options["fast"]:
+            target, time_budget = 40, 12
         default_base = Path(getattr(settings, "REVIEWS_CACHE_DIR",
                                     Path(settings.BASE_DIR) / "var" / "reviews"))
         out_dir = Path(options["out_dir"]) if options.get("out_dir") else (default_base / place_id)
@@ -83,13 +93,15 @@ class Command(BaseCommand):
             place_url = f"{place_url}{sep}hl=en"
 
         # 3) Kick off our async scrape and wait for it
-        asyncio.run(scrape_reviews(place_url, place_id, out_dir=out_dir))
-
+        asyncio.run(scrape_reviews(place_url=place_url, place_id=place_id,
+                                   target_reviews=target,
+                                   time_budget=time_budget,
+                                   out_dir=out_dir))
 
 def _norm_text(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
 
-async def scrape_reviews(place_url, place_id, out_dir):
+async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_dir):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context()
@@ -115,8 +127,8 @@ async def scrape_reviews(place_url, place_id, out_dir):
         """)
 
         await page.goto(place_url, wait_until="domcontentloaded")
-        total_reviews = 30  # target
-
+        deadline = (time.perf_counter() + time_budget) if time_budget else None
+        total_reviews = target_reviews
         # Find scroll container
         handle = await page.evaluate_handle(
             """() => {
@@ -257,6 +269,9 @@ async def scrape_reviews(place_url, place_id, out_dir):
 
             prev_count = end
             if len(reviews) >= total_reviews:
+                break
+            if deadline and time.perf_counter() >= deadline:
+                print("⏱️ time budget reached; returning partial results")
                 break
 
         print(f"🎉 Collected {len(reviews)} reviews")

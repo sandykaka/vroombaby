@@ -6,7 +6,8 @@ openai
 playwright
 pandas
 ethnicolr
-tensorflow-macos==2.12.0
-tensorflow-metal==1.2.0
+#tensorflow-macos==2.12.0
+#tensorflow-metal==1.2.0
+tensorflow==2.12.0 # ubuntu
 dotenv
 whitenoise
