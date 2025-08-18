@@ -20,7 +20,7 @@ from openai import OpenAI
 from django.conf     import settings
 from django.http     import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_GET
-from .utils.reviews_cache import dish_csv_path, is_stale, ensure_csv_async, generate_csv_blocking
+from .utils.reviews_cache import dish_csv_path, is_stale, kickoff_background_refresh, csv_ready_or_kickoff
 from django.core.cache import cache
 import pandas as pd
 logger = logging.getLogger(__name__)
@@ -443,20 +443,20 @@ def restaurant_recommendations(request):
 
     csv_path = dish_csv_path(place_id)
 
-    # 1) Cold cache: compute once if missing
-    if not csv_path.exists():
-        try:
-            generate_csv_blocking(place_id, fast=True)   # ~40 reviews ≤12s
-        except Exception as e:
-            return JsonResponse({"dishes": [], "error": f"generate failed: {e}"}, status=500)
-        # Immediately kick off deep scrape for next time
-        ensure_csv_async(place_id)
+    # Cold cache → DO NOT BLOCK. Kick off async and return partial immediately.
+    if not csv_ready_or_kickoff(place_id):
+        return JsonResponse({
+            "place_id": place_id,
+            "ethnicity": eth,
+            "dishes": [],
+            "partial": True,     # iOS: show spinner / "gathering…" and poll
+        })
 
-    # 2) Warm cache: serve now; refresh in background if stale
+    # Warm cache → serve now; if stale, nudge a background refresh.
     if is_stale(csv_path):
-        ensure_csv_async(place_id)
+        kickoff_background_refresh(place_id)
 
-    # 3) App-level response cache (fast, short TTL). Include CSV mtime in the key.
+    # App-level response cache keyed by CSV mtime (fast).
     try:
         mtime = int(csv_path.stat().st_mtime)
     except Exception:
@@ -466,28 +466,22 @@ def restaurant_recommendations(request):
     if cached is not None:
         return JsonResponse(cached)
 
-    # 3) Read + short app cache (your existing code)
-    try:
-        mtime = int(csv_path.stat().st_mtime)
-    except Exception:
-        mtime = 0
-    cache_key = f"rr:{place_id}:{eth}:{mtime}"
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return JsonResponse(cached)
-
-    # 4) Read and filter the cached CSV
+    # Read current CSV
     try:
         df = pd.read_csv(csv_path, dtype={"ethnicity_ui":"string","dish":"string"})
     except Exception as e:
-        return JsonResponse({"dishes": [], "error": f"read failed: {e}"}, status=500)
+        # If read fails, tell client to keep polling rather than exploding HTML
+        return JsonResponse({"place_id": place_id, "ethnicity": eth, "dishes": [], "partial": True})
+
+    if df.empty:
+        payload = {"place_id": place_id, "ethnicity": eth, "dishes": [], "partial": True}
+        cache.set(cache_key, payload, timeout=120)
+        return JsonResponse(payload)
 
     sub = df[df["ethnicity_ui"].str.lower() == eth]
-
-    # empty cases
-    if df.empty or sub.empty:
-        payload = {"dishes": [], "partial": True}  # likely fast pass or no data
-        cache.set(cache_key, payload, timeout=300)
+    if sub.empty:
+        payload = {"place_id": place_id, "ethnicity": eth, "dishes": [], "partial": False}
+        cache.set(cache_key, payload, timeout=120)
         return JsonResponse(payload)
 
     sub = sub.sort_values(
@@ -504,6 +498,6 @@ def restaurant_recommendations(request):
 
     payload = {"dishes": dishes, "partial": is_stale(csv_path)}
 
-    cache.set(cache_key, payload, timeout=300)  # 5 minutes
+    cache.set(cache_key, payload, timeout=180)
     return JsonResponse(payload)
 

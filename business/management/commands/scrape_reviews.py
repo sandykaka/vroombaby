@@ -43,266 +43,310 @@ FIELD_HEADERS = [
 TAB_LABELS = {"Indian","American","Chinese","Mexican","Italian"}
 
 class Command(BaseCommand):
-    help = "Scrape all Google Maps reviews for a given place_id via DOM + Playwright"
+    help = "Scrape Google Maps reviews for a place_id, then build dish_mentions for that place."
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            "--place_id", "-p",
-            required=True,
-            help="The Google Maps Place ID to scrape reviews for."
-        )
-        parser.add_argument("--target", type=int, default=30,
-                            help="Target number of reviews to collect.")
-        parser.add_argument("--time_budget", type=int, default=0,
-                            help="Hard time budget in seconds (0 = no cap).")
+        parser.add_argument("--place_id", "-p", required=True)
+        parser.add_argument("--target", type=int, default=200,
+                            help="Target number of reviews to collect (default 200)")
+        parser.add_argument("--time-budget", dest="time_budget", type=int, default=45,
+                            help="Hard time budget in seconds; return partial results when exceeded.")
         parser.add_argument("--fast", action="store_true",
-                            help="Shortcut for --target=40 --time_budget=12")
-
-        parser.add_argument("--out-dir", default=None, help="Output directory for reviews/authors/dish files")
+                            help="Shorthand for --target 40 --time-budget 12")
+        parser.add_argument("--append", action="store_true",
+                            help="Resume from existing reviews.json instead of starting fresh.")
+        parser.add_argument("--out-dir", dest="out_dir", default=None,
+                            help="Optional output directory. Defaults to <REVIEWS_CACHE_DIR>/<place_id>")
 
     def handle(self, *args, **options):
         place_id = options["place_id"]
-        target = options["target"]
+        target = int(options.get("target") or 40)
         time_budget = options["time_budget"]
+        append = bool(options.get("append"))
+
         if options["fast"]:
             target, time_budget = 40, 12
-        default_base = Path(getattr(settings, "REVIEWS_CACHE_DIR",
-                                    Path(settings.BASE_DIR) / "var" / "reviews"))
-        out_dir = Path(options["out_dir"]) if options.get("out_dir") else (default_base / place_id)
+
+        base_default = Path(getattr(
+            settings, "REVIEWS_CACHE_DIR",
+            Path(settings.BASE_DIR) / "var" / "reviews"
+        ))
+        out_dir = Path(options["out_dir"]) if options.get("out_dir") else (base_default / place_id)
         out_dir.mkdir(parents=True, exist_ok=True)
-        # 1) Resolve the canonical maps URL via the Places API
-        gmaps = GoogleMapsClient(key=settings.GOOGLE_API_KEY)
+
+        # Per-place lock to avoid stampede
+        lock = out_dir / ".refresh.lock"
+        if lock.exists():
+            # If another refresh is running recently, skip
+            try:
+                age = time.time() - lock.stat().st_mtime
+                if age < 600:  # 10 minutes safety
+                    self.stdout.write(f"[scrape_reviews] lock exists ({int(age)}s old) → skip")
+                    return
+            except Exception:
+                pass
+
         try:
-            resp = gmaps.place(place_id=place_id, fields=["url"])
-            place_url = resp["result"]["url"]
-        except Exception:
-            if "NOT_FOUND" in str(e):
-                self.stderr.write("❌ Place ID invalid, aborting.")
-                return
-            else:
+            lock.write_text(f"pid={str(hash(place_id))} at {time.time():.0f}\n", encoding="utf-8")
+
+            # 1) Resolve canonical URL via Places API
+            gmaps = GoogleMapsClient(key=settings.GOOGLE_API_KEY)
+            try:
+                resp = gmaps.place(place_id=place_id, fields=["url"])
+                place_url = resp["result"]["url"]
+            except Exception as e:
+                if "NOT_FOUND" in str(e):
+                    self.stderr.write("❌ Place ID invalid, aborting.")
+                    return
                 raise
 
-        # 2) Canonicalize to a cid=… URL & force English UI
-        p = urlparse(place_url)
-        q = parse_qs(p.query)
-        if "cid" in q:
-            cid = q["cid"][0]
-            place_url = f"https://www.google.com/maps/place/?cid={cid}&hl=en"
-        else:
-            sep = "&" if "?" in place_url else "?"
-            place_url = f"{place_url}{sep}hl=en"
+            # 2) Canonicalize to cid and force English UI
+            p = urlparse(place_url)
+            q = parse_qs(p.query)
+            if "cid" in q:
+                cid = q["cid"][0]
+                place_url = f"https://www.google.com/maps/place/?cid={cid}&hl=en"
+            else:
+                sep = "&" if "?" in place_url else "?"
+                place_url = f"{place_url}{sep}hl=en"
 
-        # 3) Kick off our async scrape and wait for it
-        asyncio.run(scrape_reviews(place_url=place_url, place_id=place_id,
-                                   target_reviews=target,
-                                   time_budget=time_budget,
-                                   out_dir=out_dir))
+            # 3) Scrape with budget/target
+            asyncio.run(
+                scrape_reviews(
+                    place_url=place_url,
+                    place_id=place_id,
+                    target_reviews=target,
+                    time_budget=time_budget,
+                    out_dir=out_dir,
+                    append=append,
+                )
+            )
 
-        place_dir = Path(settings.REVIEWS_CACHE_DIR) / place_id
-        lock = place_dir / ".refresh.lock"
-        try:
-            lock.unlink(missing_ok=True)
-        except Exception:
-            pass
+            # 4) After scrape, build authors + dishes inside this place dir
+            authors_csv_path = write_or_update_authors_csv(
+                str(out_dir / "reviews.json"),
+                str(out_dir / "authors.csv"),
+            )
 
+            prefer = out_dir / "dish_lexicon.csv"
+            fallback = Path(settings.BASE_DIR) / "data" / "dish_lexicon.csv"
+            lexicon_csv_path = str(prefer if prefer.exists() else fallback)
+
+            build_dish_mentions(
+                reviews_json=str(out_dir / "reviews.json"),
+                authors_csv=authors_csv_path,
+                lexicon_csv=lexicon_csv_path,
+                out_csv=str(out_dir / "dish_mentions.csv"),
+                save_raw_csv=str(out_dir / "dish_mentions_raw.csv"),
+                mode="both",
+            )
+        finally:
+            try:
+                lock.unlink(missing_ok=True)
+            except Exception:
+                pass
 def _norm_text(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
 
-async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_dir):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
-
-        BLOCK_TYPES = {"image", "font", "stylesheet", "media"}
-        BLOCK_SNIPPETS = (
-            "/maps/vt", "lh3.googleusercontent.com", "ggpht.com",
-            "fonts.gstatic.com", ".woff", ".woff2", ".ttf",
-            "/gen_204", "/collect",
-        )
-        def _should_block(req):
-            if req.resource_type in BLOCK_TYPES:
-                return True
-            u = req.url
-            return any(s in u for s in BLOCK_SNIPPETS)
-
-        await context.route("**/*", lambda r: r.abort() if _should_block(r.request) else r.continue_())
-        page = await context.new_page()
-
-        await page.add_style_tag(content="""
-          *,*::before,*::after{animation:none!important;transition:none!important}
-          html{scroll-behavior:auto!important}
-        """)
-
-        await page.goto(place_url, wait_until="domcontentloaded")
-        deadline = (time.perf_counter() + time_budget) if time_budget else None
-        total_reviews = target_reviews
-        # Find scroll container
-        handle = await page.evaluate_handle(
-            """() => {
-                const card = document.querySelector("div[data-review-id]");
-                if (!card) return document.scrollingElement;
-                let c = card.closest('[role=region]');
-                if (!c) c = document.querySelector('div.section-scrollbox');
-                return c || document.scrollingElement;
-            }"""
-        )
-        t0 = time.perf_counter()
-        scroll_el = handle.as_element()
-        tag = await scroll_el.evaluate("(el) => el.tagName")
-        t1 = time.perf_counter()
-        print(f"✅ Using scroll container: {tag} (+{t1-t0:.2f}s)")
-
-        locator = page.locator('div[data-review-id]')
-
-        # Prime: gentle scroll & open sorter
-        await locator.first.wait_for(state="visible", timeout=10_000)
-        for _ in range(3):
-            await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.25)")
-            await page.wait_for_timeout(300)
-
-        # Try clicking “More reviews (N)” if present
-        more_reviews = page.locator('text=/More reviews/').first
-        if await more_reviews.count():
-            await more_reviews.scroll_into_view_if_needed()
-            await more_reviews.click()
-            await page.wait_for_timeout(600)
-
-        # Sort → Highest rating
+async def scrape_reviews(
+        place_url: str,
+        place_id: str,
+        target_reviews: int,
+        time_budget: int,
+        out_dir: Path,
+        append: bool = False,
+):
+    """
+    Scrape up to target_reviews within time_budget seconds.
+    If append=True and reviews.json exists, resume from it (dedup by id/text).
+    Always writes to out_dir/reviews.json (pretty JSON).
+    """
+    # Seed from existing payload if resuming
+    reviews = []
+    seen_ids, seen_text = set(), set()
+    rj = out_dir / "reviews.json"
+    if append and rj.exists():
         try:
-            await page.get_by_role("button", name="Sort reviews").click()
-            menu = page.get_by_role("menu")
-            await menu.wait_for(state="visible", timeout=5_000)
-            await menu.get_by_role("menuitemradio", name="Highest rating").click()
-            await page.wait_for_timeout(250)
-        except Exception:
-            pass  # if sort UI not present, continue
+            reviews = json.loads(rj.read_text(encoding="utf-8"))
+            for r in reviews:
+                rid = (r.get("id") or "").strip()
+                txt = _norm_text(r.get("text") or "")
+                if rid:
+                    seen_ids.add(rid)
+                elif txt:
+                    seen_text.add(txt)
+            print(f"[resume] loaded {len(reviews)} existing reviews; seed ids={len(seen_ids)}, txt={len(seen_text)}")
+        except Exception as e:
+            print(f"[resume] failed to load existing reviews.json: {e}")
 
-        # --- DEDUPE + ROBUST AUTHOR ---
-        seen_ids: set[str] = set()
-        seen_text: set[str] = set()
-        reviews: list[dict] = []
+    deadline = (time.perf_counter() + time_budget) if time_budget else None
 
-        batch_size = 20
-        prev_count = 0
+    browser = None
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context()
 
-        while True:
-            curr_count = await locator.count()
-            if curr_count <= prev_count:
-                # nudge scroll to load more
-                await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.6)")
+            # Trim bandwidth
+            BLOCK_TYPES = {"image", "font", "stylesheet", "media"}
+            BLOCK_SNIPPETS = (
+                "/maps/vt", "lh3.googleusercontent.com", "ggpht.com",
+                "fonts.gstatic.com", ".woff", ".woff2", ".ttf",
+                "/gen_204", "/collect",
+            )
+
+            def _should_block(req):
+                if req.resource_type in BLOCK_TYPES:
+                    return True
+                u = req.url
+                return any(s in u for s in BLOCK_SNIPPETS)
+
+            await context.route("**/*", lambda r: r.abort() if _should_block(r.request) else r.continue_())
+            page = await context.new_page()
+
+            await page.add_style_tag(content="""
+              *,*::before,*::after{animation:none!important;transition:none!important}
+              html{scroll-behavior:auto!important}
+            """)
+
+            await page.goto(place_url, wait_until="domcontentloaded")
+
+            # find scroll container
+            handle = await page.evaluate_handle(
+                """() => {
+                    const card = document.querySelector("div[data-review-id]");
+                    if (!card) return document.scrollingElement;
+                    let c = card.closest('[role=region]');
+                    if (!c) c = document.querySelector('div.section-scrollbox');
+                    return c || document.scrollingElement;
+                }"""
+            )
+            t0 = time.perf_counter()
+            scroll_el = handle.as_element()
+            tag = await scroll_el.evaluate("(el) => el.tagName")
+            print(f"✅ Using scroll container: {tag}")
+
+            locator = page.locator('div[data-review-id]')
+
+            # prime a bit + open “Sort”
+            await locator.first.wait_for(state="visible", timeout=10_000)
+            for _ in range(3):
+                await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.25)")
+                await page.wait_for_timeout(250)
+
+            # “More reviews” click if visible
+            more_reviews = page.locator('text=/More reviews/').first
+            if await more_reviews.count():
+                await more_reviews.scroll_into_view_if_needed()
+                await more_reviews.click()
                 await page.wait_for_timeout(400)
-                curr_count = await locator.count()
-                if curr_count <= prev_count:
+
+            # Sort by “Highest rating” (best signal for food recs)
+            try:
+                await page.get_by_role("button", name="Sort reviews").click()
+                menu = page.get_by_role("menu")
+                await menu.wait_for(state="visible", timeout=5_000)
+                await menu.get_by_role("menuitemradio", name="Highest rating").click()
+                await page.wait_for_timeout(200)
+            except Exception:
+                pass
+
+            # main loop
+            prev_count = 0
+            batch_size = 20
+
+            while True:
+                # bail on time
+                if deadline and time.perf_counter() >= deadline:
+                    print("⏱️ time budget reached; returning partial results")
                     break
 
-            end = min(prev_count + batch_size, curr_count)
-            t2 = time.perf_counter()
+                curr_count = await locator.count()
+                if curr_count <= prev_count:
+                    await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.6)")
+                    await page.wait_for_timeout(300)
+                    curr_count = await locator.count()
+                    if curr_count <= prev_count:
+                        break
 
-            # 1) expand “See more” in this slice
-            await page.evaluate(
-                """([start,end]) => {
-                    const cards = Array.from(document.querySelectorAll('div[data-review-id]')).slice(start,end);
-                    for (const el of cards) {
-                        const btn = el.querySelector('button[aria-label="See more"]');
-                        if (btn) btn.click();
-                    }
-                }""",
-                [prev_count, end]
-            )
+                end = min(prev_count + batch_size, curr_count)
 
-            # 2) bulk extract: id + robust author + text
-            batch = await page.evaluate(
-                """([start,end]) => {
-                    const out = [];
-                    const cards = Array.from(document.querySelectorAll('div[data-review-id]')).slice(start,end);
-                    for (const el of cards) {
-                        const id = el.getAttribute('data-review-id') || "";
-                        // author priority: avatar aria-label "Photo of X"
-                        let author = "";
-                        const avatar = el.querySelector('button[aria-label^="Photo of "]');
-                        if (avatar) {
-                            author = (avatar.getAttribute('aria-label') || "").replace(/^Photo of\\s+/i, "").trim();
+                # expand "See more" within this slice
+                await page.evaluate(
+                    """([start,end]) => {
+                        const cards = Array.from(document.querySelectorAll('div[data-review-id]')).slice(start,end);
+                        for (const el of cards) {
+                            const btn = el.querySelector('button[aria-label="See more"]');
+                            if (btn) btn.click();
                         }
-                        if (!author) {
-                            // fallback to card aria-label (sometimes set to name)
-                            author = (el.getAttribute('aria-label') || "").trim();
-                        }
-                        // final fallback: profile button’s first line
-                        if (!author) {
-                            const prof = el.querySelector('button[jsaction*="reviewerLink"] div');
-                            if (prof) {
-                                author = (prof.textContent || "").split("\\n")[0].trim();
+                    }""",
+                    [prev_count, end]
+                )
+
+                # bulk extract id, author, text
+                batch = await page.evaluate(
+                    """([start,end]) => {
+                        const out = [];
+                        const cards = Array.from(document.querySelectorAll('div[data-review-id]')).slice(start,end);
+                        for (const el of cards) {
+                            const id = el.getAttribute('data-review-id') || "";
+                            // author priority: avatar aria-label "Photo of X"
+                            let author = "";
+                            const avatar = el.querySelector('button[aria-label^="Photo of "]');
+                            if (avatar) {
+                                author = (avatar.getAttribute('aria-label') || "").replace(/^Photo of\\s+/i, "").trim();
                             }
+                            if (!author) author = (el.getAttribute('aria-label') || "").trim();
+                            if (!author) {
+                                const prof = el.querySelector('button[jsaction*="reviewerLink"] div');
+                                if (prof) author = (prof.textContent || "").split("\\n")[0].trim();
+                            }
+                            const txtEl = el.querySelector('[lang]');
+                            const text = txtEl ? txtEl.innerText.trim() : "";
+                            out.push({ id, author, text });
                         }
-                        const txtEl = el.querySelector('[lang]');
-                        const text = txtEl ? txtEl.innerText.trim() : "";
-                        out.push({ id, author, text });
-                    }
-                    return out;
-                }""",
-                [prev_count, end]
-            )
+                        return out;
+                    }""",
+                    [prev_count, end]
+                )
 
-            # 3) de-dupe + append
-            added = 0
-            for entry in batch:
-                rid  = entry.get("id") or ""
-                text = entry.get("text") or ""
-                key_text = _norm_text(text)
+                added = 0
+                for entry in batch:
+                    rid = (entry.get("id") or "").strip()
+                    txt = entry.get("text") or ""
+                    key_text = _norm_text(txt)
 
-                # primary: use review id
-                if rid:
-                    if rid in seen_ids:
-                        continue
-                    seen_ids.add(rid)
-                else:
-                    # fallback: text-based dedupe
-                    if key_text in seen_text:
-                        continue
-                    seen_text.add(key_text)
+                    if rid:
+                        if rid in seen_ids:
+                            continue
+                        seen_ids.add(rid)
+                    else:
+                        if key_text in seen_text:
+                            continue
+                        seen_text.add(key_text)
 
-                # ensure author isn’t empty if we can infer from text (last resort)
-                author = entry.get("author") or ""
-                entry["author"] = author
+                    # ensure author key exists even if blank
+                    entry["author"] = entry.get("author") or ""
+                    reviews.append(entry)
+                    added += 1
 
-                reviews.append(entry)
-                added += 1
+                # flush progressively
+                rj.write_text(json.dumps(reviews, indent=2), encoding="utf-8")
 
-            (out_dir / "reviews.json").write_text(json.dumps(reviews, indent=2), encoding="utf-8")
+                print(f"✅ Collected {len(reviews)}/{target_reviews} (added {added})  Δ={end - prev_count}")
 
+                prev_count = end
+                if len(reviews) >= target_reviews:
+                    break
 
-            t3 = time.perf_counter()
-            print(f"✅ Collected {len(reviews)}/{total_reviews} reviews…(+{t3-t2:.2f}s)   total since container: {t3-t0:.2f}s")
+            print(f"🎉 Collected {len(reviews)} total in {time.perf_counter() - t0:.2f}s")
 
-            prev_count = end
-            if len(reviews) >= total_reviews:
-                break
-            if deadline and time.perf_counter() >= deadline:
-                print("⏱️ time budget reached; returning partial results")
-                break
-
-        print(f"🎉 Collected {len(reviews)} reviews")
-        await browser.close()
-        # write/update authors for THIS place
-        authors_csv_path = write_or_update_authors_csv(
-            str(out_dir / "reviews.json"),
-            str(out_dir / "authors.csv"),
-        )
-
-        # choose a lexicon: prefer a file next to the place, otherwise a project-level one
-        prefer = out_dir / "dish_lexicon.csv"
-        fallback = Path(settings.BASE_DIR) / "data" / "dish_lexicon.csv"
-        lexicon_csv_path = str(prefer if prefer.exists() else fallback)
-
-        # aggregate → dish_mentions.csv inside out_dir
-        build_dish_mentions(
-            reviews_json=str(out_dir / "reviews.json"),
-            authors_csv=authors_csv_path,                     # the place authors.csv
-            lexicon_csv=lexicon_csv_path,
-            out_csv=str(out_dir / "dish_mentions.csv"),
-            save_raw_csv=str(out_dir / "dish_mentions_raw.csv"),
-            mode="both",
-        )
+    finally:
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                pass
 
 # ---------- keys & mapping ----------
 def author_key_from_name(name: str) -> str:

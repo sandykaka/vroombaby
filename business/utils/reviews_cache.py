@@ -1,109 +1,150 @@
-# business/reviews_cache.py
-from __future__ import annotations
-import os
-import subprocess
-import sys
+# business/utils/reviews_bg.py
+import os, sys, json, time, threading, subprocess
 from pathlib import Path
-from datetime import datetime, timedelta
-
+from typing import Optional, Dict
 from django.conf import settings
-from django.core.management import call_command
 
-# -------- tuning knobs --------
-TTL = timedelta(days=7)        # how long the CSV is considered “fresh”
-FAST_TARGET = 40               # quick pass for cold-cache
-FAST_BUDGET = 12               # seconds the quick pass is allowed to run
-FULL_TARGET = 200              # background pass goal
-LOCK_MAX_AGE = timedelta(minutes=20)  # background lock auto-expires
+# ------ Tunables ------
+SCRAPER_STEPS = [40, 120, 200]  # progressive targets
+MAX_CONCURRENT_SCRAPES = int(os.getenv("SCRAPER_MAX_CONCURRENCY", "1"))
+SCRAPER_SOFT_TIMEOUT = int(os.getenv("SCRAPER_TIMEOUT_SEC", "240"))
 
-# -------- paths --------
-def _reviews_dir(place_id: str) -> Path:
-    base = Path(getattr(settings, "REVIEWS_CACHE_DIR",
-                        Path(settings.BASE_DIR) / "var" / "reviews"))
-    return base / place_id
+# ------ Paths ------
+BASE_DIR = Path(settings.BASE_DIR)
+REVIEWS_ROOT = BASE_DIR / "var" / "reviews"
 
+# You already have these in your project; keep using the same signatures:
 def dish_csv_path(place_id: str) -> Path:
-    return _reviews_dir(place_id) / "dish_mentions.csv"
+    return REVIEWS_ROOT / place_id / "dish_mentions.csv"
 
-def _lock_path(place_id: str) -> Path:
-    return _reviews_dir(place_id) / ".refresh.lock"
+def place_dir(place_id: str) -> Path:
+    return REVIEWS_ROOT / place_id
 
-def _manage_py() -> Path:
-    return Path(settings.BASE_DIR) / "manage.py"
+def progress_path(place_id: str) -> Path:
+    return place_dir(place_id) / "progress.json"
 
-# -------- freshness --------
-def is_stale(p: Path) -> bool:
+def inprogress_flag(place_id: str) -> Path:
+    return place_dir(place_id) / ".scrape_inprogress"
+
+# ------ In-process locks & concurrency gate ------
+_GLOBAL_SCRAPE_SEM = threading.Semaphore(MAX_CONCURRENT_SCRAPES)
+_PLACE_LOCKS: Dict[str, threading.Lock] = {}
+_LOCKS_LOCK = threading.Lock()
+
+def _lock_for(place_id: str) -> threading.Lock:
+    with _LOCKS_LOCK:
+        if place_id not in _PLACE_LOCKS:
+            _PLACE_LOCKS[place_id] = threading.Lock()
+        return _PLACE_LOCKS[place_id]
+
+# ------ Progress helpers ------
+def _read_progress(place_id: str) -> Dict:
+    p = progress_path(place_id)
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except Exception:
+            return {}
+    return {}
+
+def _write_progress(place_id: str, done: int) -> None:
+    p = progress_path(place_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    data = {"done": int(done), "ts": int(time.time())}
+    p.write_text(json.dumps(data))
+
+def _next_target(done: int) -> Optional[int]:
+    for t in SCRAPER_STEPS:
+        if done < t:
+            return t
+    return None  # finished all steps
+
+# ------ Subprocess runner (keeps gunicorn workers small) ------
+def _run_scraper_subprocess(place_id: str, target: int, append: bool = True) -> None:
+    """
+    Runs:  python manage.py scrape_reviews --place_id ... --target N [--append]
+    Your management command already exists; we only add --target/--append support (see below).
+    """
+    cmd = [sys.executable, "manage.py", "scrape_reviews", "--place_id", place_id, "--target", str(target)]
+    if append:
+        cmd.append("--append")
+
+    env = os.environ.copy()
+    # Keep Playwright headless & friendly to small instances.
+    env.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/var/www/.cache/ms-playwright")
+    env.setdefault("PLAYWRIGHT_NO_SANDBOX", "1")
+    env.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")   # quiet TensorFlow
+
+    subprocess.run(
+        cmd,
+        cwd=str(BASE_DIR),
+        env=env,
+        check=False,
+        timeout=SCRAPER_SOFT_TIMEOUT,  # don't let a single scrape sit forever
+    )
+
+# ------ Public API you call from your view ------
+def kickoff_background_refresh(place_id: str) -> None:
+    """Start (or continue) backfill in a daemon thread if not already in progress."""
+    def _worker():
+        # only allow limited global concurrency
+        if not _GLOBAL_SCRAPE_SEM.acquire(blocking=False):
+            return
+        try:
+            lock = _lock_for(place_id)
+            if not lock.acquire(blocking=False):
+                return  # someone already working on this place
+            try:
+                pdir = place_dir(place_id)
+                pdir.mkdir(parents=True, exist_ok=True)
+
+                flag = inprogress_flag(place_id)
+                if flag.exists():
+                    # Another process/thread already marked it
+                    return
+
+                try:
+                    flag.write_text(str(int(time.time())))
+                    prog = _read_progress(place_id)
+                    done = int(prog.get("done", 0))
+                    target = _next_target(done)
+                    if target is None:
+                        return  # fully backfilled
+
+                    _run_scraper_subprocess(place_id, target, append=True)
+                    # After scraper returns, mark progress up to target.
+                    _write_progress(place_id, done=target)
+
+                finally:
+                    try:
+                        flag.unlink()
+                    except FileNotFoundError:
+                        pass
+
+            finally:
+                try:
+                    lock.release()
+                except Exception:
+                    pass
+        finally:
+            _GLOBAL_SCRAPE_SEM.release()
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+def is_stale(csv_path: Path, max_age_sec: int = 3600) -> bool:
     try:
-        age = datetime.now().timestamp() - p.stat().st_mtime
-        return age > TTL.total_seconds()
-    except FileNotFoundError:
+        mtime = csv_path.stat().st_mtime
+        return (time.time() - mtime) > max_age_sec
+    except Exception:
         return True
 
-# -------- background refresh --------
-def _lock_is_active(lock: Path) -> bool:
-    """Return True if a recent lock file exists (i.e., refresh likely still running)."""
-    if not lock.exists():
-        return False
-    try:
-        age = datetime.now().timestamp() - lock.stat().st_mtime
-        return age < LOCK_MAX_AGE.total_seconds()
-    except FileNotFoundError:
-        return False
-
-def _touch_lock(lock: Path) -> None:
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        lock.touch(exist_ok=True)
-    except Exception:
-        pass
-
-def kickoff_background_refresh(place_id: str) -> None:
-    """Spawn the scraper in the same venv with Playwright env set."""
-    proj_root = Path(settings.BASE_DIR)
-    env = os.environ.copy()
-    env["PLAYWRIGHT_BROWSERS_PATH"] = os.getenv(
-        "PLAYWRIGHT_BROWSERS_PATH",
-        "/home/ubuntu/.cache/ms-playwright"  # <-- keep consistent with systemd
-    )
-    env["PLAYWRIGHT_NO_SANDBOX"] = "1"
-
-    # simple per-place lock to avoid duplicate scrapes
-    lock = dish_csv_path(place_id).parent / ".refresh.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    if lock.exists():
-        return
-    lock.write_text(str(os.getpid()))
-
-    subprocess.Popen(
-        [sys.executable, str(proj_root / "manage.py"), "scrape_reviews", "-p", place_id],
-        cwd=str(proj_root),
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.STDOUT,
-    )
-    # scraper will remove the lock when it finishes
-# Backwards-compat name used by your view:
-def ensure_csv_async(place_id: str) -> None:
+def csv_ready_or_kickoff(place_id: str) -> bool:
+    """
+    Returns True if we already have a CSV for this place_id.
+    If not, start background step 1 and return False immediately.
+    """
+    p = dish_csv_path(place_id)
+    if p.exists():
+        return True
     kickoff_background_refresh(place_id)
-
-# -------- cold-cache generator (blocking) --------
-def generate_csv_blocking(place_id: str, fast: bool = True) -> Path:
-    """
-    Synchronous scrape for the very first request so you can return something quickly.
-    - fast=True  → quick pass (FAST_TARGET within FAST_BUDGET seconds)
-    - fast=False → full pass
-    Returns the expected dish_mentions.csv path.
-    """
-    outdir = _reviews_dir(place_id)
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    args = ["scrape_reviews", "--place_id", place_id]
-    if fast:
-        # Your management command should interpret these as a short pass.
-        args += ["--target", str(FAST_TARGET), "--time_budget", str(FAST_BUDGET)]
-    else:
-        args += ["--target", str(FULL_TARGET), "--time_budget", "0"]
-
-    # Run in-process so first response isn’t empty.
-    call_command(*args)
-    return outdir / "dish_mentions.csv"
+    return False
