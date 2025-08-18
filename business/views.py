@@ -464,6 +464,7 @@ def restaurant_recommendations(request):
         try:
             # Prefer a fast kickoff if your helper supports it
             try:
+                logger.info("COLD MISS %s — starting FAST build and returning partial", place_id)
                 ensure_csv_async(place_id, fast=True)   # new signature (if you added it)
             except TypeError:
                 ensure_csv_async(place_id)              # fallback to older helper

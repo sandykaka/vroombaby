@@ -14,9 +14,16 @@ FAST_TIME_BUDGET = 12           # keeps first response snappy
 BACKFILL_TARGET = 220
 BACKFILL_TIME_BUDGET = 45
 STALE_TTL_SECS = 15 * 60        # if CSV older than this, treat as partial
+FULL_TARGET   = getattr(settings, "REVIEWS_TARGET",       200)
+FULL_BUDGET   = getattr(settings, "REVIEWS_FULL_BUDGET",   90)
+LOCK_STALE_S  = getattr(settings, "REVIEWS_LOCK_STALE_S", 900)  # 15 min
 
 def place_dir(place_id: str) -> Path:
-    return REVIEWS_DIR / place_id
+    base = Path(getattr(settings, "REVIEWS_CACHE_DIR",
+                        Path(settings.BASE_DIR) / "var" / "reviews"))
+    d = base / place_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 def dish_csv_path(place_id: str) -> Path:
     return place_dir(place_id) / "dish_mentions.csv"
@@ -58,17 +65,10 @@ def _unlock(lock_path: Path) -> None:
         pass
 
 def is_stale(csv_path: Path) -> bool:
-    """Stale if missing, tiny, or old."""
-    if not csv_path.exists():
-        return True
     try:
-        df_rows = sum(1 for _ in open(csv_path, "r", encoding="utf-8")) - 1  # minus header
-    except Exception:
-        df_rows = 0
-    if df_rows < 8:  # skinny → likely missing tabs
+        return (time.time() - csv_path.stat().st_mtime) > 3600
+    except FileNotFoundError:
         return True
-    age = datetime.now().timestamp() - csv_path.stat().st_mtime
-    return age > 24 * 7 * 3600
 
 
 def generate_csv_blocking(place_id: str, fast: bool = True) -> None:
@@ -81,37 +81,50 @@ def generate_csv_blocking(place_id: str, fast: bool = True) -> None:
     subprocess.check_call(cmd, cwd=str(settings.BASE_DIR), env=env)
 
 
-def kickoff_background_refresh(place_id: str, fast: bool = False) -> None:
-    """Fire-and-forget backfill using current interpreter (sys.executable)."""
-    pd = Path(getattr(settings, "REVIEWS_CACHE_DIR",
-                      Path(settings.BASE_DIR) / "var" / "reviews")) / place_id
-    pd.mkdir(parents=True, exist_ok=True)
-    lock = pd / ".refresh.lock"
 
-    # simple 10-min lock
-    try:
-        if lock.exists() and (datetime.now().timestamp() - lock.stat().st_mtime) < 600:
-            return
-        lock.write_text(datetime.now().isoformat(), encoding="utf-8")
-    except Exception:
-        pass
+def ensure_csv_async(place_id: str, fast: bool = False) -> bool:
+    """Spawn manage.py scrape_reviews in the background.
+       Returns True if a job was started, False if a fresh lock existed."""
+    d = place_dir(place_id)
+    lock = d / ".refresh.lock"
 
-    manage = Path(settings.BASE_DIR) / "manage.py"
-    cmd = [sys.executable, str(manage), "scrape_reviews", "--place_id", place_id]
+    # Respect a fresh lock
+    if lock.exists():
+        try:
+            if time.time() - lock.stat().st_mtime < LOCK_STALE_S:
+                return False
+        except Exception:
+            pass
+        # stale lock — remove it
+        try: lock.unlink()
+        except Exception: pass
+
+    # create/refresh the lock
+    lock.write_text(str(os.getpid()))
+
+    log_path = d / "scrape.log"
+    cmd = [
+        sys.executable,
+        str(Path(settings.BASE_DIR) / "manage.py"),
+        "scrape_reviews",
+        "-p", place_id,
+    ]
     if fast:
-        cmd.append("--fast")
+        cmd += ["--fast"]
+    else:
+        cmd += ["--target", str(FULL_TARGET), "--time-budget", str(FULL_BUDGET)]
 
     env = os.environ.copy()
-    log_path = pd / "refresh.log"
-    with open(log_path, "ab", buffering=0) as log:
+    env.setdefault("DJANGO_SETTINGS_MODULE", env.get("DJANGO_SETTINGS_MODULE", ""))
+
+    with open(log_path, "a", buffering=1) as out:
+        out.write(f"\n[{time.strftime('%F %T')}] start: {'FAST' if fast else 'FULL'} -> {' '.join(cmd)}\n")
         subprocess.Popen(
             cmd,
             cwd=str(settings.BASE_DIR),
             env=env,
-            stdout=log,
-            stderr=log,
-            start_new_session=True,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            close_fds=True,
         )
-
-def ensure_csv_async(place_id: str) -> None:
-    kickoff_background_refresh(place_id, fast=False)  # real backfill
+    return True
