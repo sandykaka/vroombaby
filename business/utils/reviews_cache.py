@@ -1,150 +1,149 @@
-# business/utils/reviews_bg.py
-import os, sys, json, time, threading, subprocess
+# reviews_cache.py
+from __future__ import annotations
+import json, os, subprocess, time
 from pathlib import Path
-from typing import Optional, Dict
 from django.conf import settings
 
-# ------ Tunables ------
-SCRAPER_STEPS = [40, 120, 200]  # progressive targets
-MAX_CONCURRENT_SCRAPES = int(os.getenv("SCRAPER_MAX_CONCURRENCY", "1"))
-SCRAPER_SOFT_TIMEOUT = int(os.getenv("SCRAPER_TIMEOUT_SEC", "240"))
+REVIEWS_DIR = Path(getattr(settings, "REVIEWS_CACHE_DIR",
+                           Path(settings.BASE_DIR) / "var" / "reviews"))
 
-# ------ Paths ------
-BASE_DIR = Path(settings.BASE_DIR)
-REVIEWS_ROOT = BASE_DIR / "var" / "reviews"
-
-# You already have these in your project; keep using the same signatures:
-def dish_csv_path(place_id: str) -> Path:
-    return REVIEWS_ROOT / place_id / "dish_mentions.csv"
+FAST_TARGET = 40
+FAST_TIME_BUDGET = 12           # keeps first response snappy
+BACKFILL_TARGET = 220
+BACKFILL_TIME_BUDGET = 45
+STALE_TTL_SECS = 15 * 60        # if CSV older than this, treat as partial
 
 def place_dir(place_id: str) -> Path:
-    return REVIEWS_ROOT / place_id
+    return REVIEWS_DIR / place_id
 
-def progress_path(place_id: str) -> Path:
-    return place_dir(place_id) / "progress.json"
+def dish_csv_path(place_id: str) -> Path:
+    return place_dir(place_id) / "dish_mentions.csv"
 
-def inprogress_flag(place_id: str) -> Path:
-    return place_dir(place_id) / ".scrape_inprogress"
+def reviews_json_path(place_id: str) -> Path:
+    return place_dir(place_id) / "reviews.json"
 
-# ------ In-process locks & concurrency gate ------
-_GLOBAL_SCRAPE_SEM = threading.Semaphore(MAX_CONCURRENT_SCRAPES)
-_PLACE_LOCKS: Dict[str, threading.Lock] = {}
-_LOCKS_LOCK = threading.Lock()
+def _lock_path(place_id: str) -> Path:
+    return place_dir(place_id) / ".refresh.lock"
 
-def _lock_for(place_id: str) -> threading.Lock:
-    with _LOCKS_LOCK:
-        if place_id not in _PLACE_LOCKS:
-            _PLACE_LOCKS[place_id] = threading.Lock()
-        return _PLACE_LOCKS[place_id]
-
-# ------ Progress helpers ------
-def _read_progress(place_id: str) -> Dict:
-    p = progress_path(place_id)
-    if p.exists():
-        try:
-            return json.loads(p.read_text())
-        except Exception:
-            return {}
-    return {}
-
-def _write_progress(place_id: str, done: int) -> None:
-    p = progress_path(place_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    data = {"done": int(done), "ts": int(time.time())}
-    p.write_text(json.dumps(data))
-
-def _next_target(done: int) -> Optional[int]:
-    for t in SCRAPER_STEPS:
-        if done < t:
-            return t
-    return None  # finished all steps
-
-# ------ Subprocess runner (keeps gunicorn workers small) ------
-def _run_scraper_subprocess(place_id: str, target: int, append: bool = True) -> None:
+def _atomic_lock(lock_path: Path) -> bool:
     """
-    Runs:  python manage.py scrape_reviews --place_id ... --target N [--append]
-    Your management command already exists; we only add --target/--append support (see below).
+    Returns True if we created the lock, False if it already existed.
+    The lock file contains JSON with pid and ts.
     """
-    cmd = [sys.executable, "manage.py", "scrape_reviews", "--place_id", place_id, "--target", str(target)]
-    if append:
-        cmd.append("--append")
-
-    env = os.environ.copy()
-    # Keep Playwright headless & friendly to small instances.
-    env.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/var/www/.cache/ms-playwright")
-    env.setdefault("PLAYWRIGHT_NO_SANDBOX", "1")
-    env.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")   # quiet TensorFlow
-
-    subprocess.run(
-        cmd,
-        cwd=str(BASE_DIR),
-        env=env,
-        check=False,
-        timeout=SCRAPER_SOFT_TIMEOUT,  # don't let a single scrape sit forever
-    )
-
-# ------ Public API you call from your view ------
-def kickoff_background_refresh(place_id: str) -> None:
-    """Start (or continue) backfill in a daemon thread if not already in progress."""
-    def _worker():
-        # only allow limited global concurrency
-        if not _GLOBAL_SCRAPE_SEM.acquire(blocking=False):
-            return
-        try:
-            lock = _lock_for(place_id)
-            if not lock.acquire(blocking=False):
-                return  # someone already working on this place
-            try:
-                pdir = place_dir(place_id)
-                pdir.mkdir(parents=True, exist_ok=True)
-
-                flag = inprogress_flag(place_id)
-                if flag.exists():
-                    # Another process/thread already marked it
-                    return
-
-                try:
-                    flag.write_text(str(int(time.time())))
-                    prog = _read_progress(place_id)
-                    done = int(prog.get("done", 0))
-                    target = _next_target(done)
-                    if target is None:
-                        return  # fully backfilled
-
-                    _run_scraper_subprocess(place_id, target, append=True)
-                    # After scraper returns, mark progress up to target.
-                    _write_progress(place_id, done=target)
-
-                finally:
-                    try:
-                        flag.unlink()
-                    except FileNotFoundError:
-                        pass
-
-            finally:
-                try:
-                    lock.release()
-                except Exception:
-                    pass
-        finally:
-            _GLOBAL_SCRAPE_SEM.release()
-
-    threading.Thread(target=_worker, daemon=True).start()
-
-def is_stale(csv_path: Path, max_age_sec: int = 3600) -> bool:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        mtime = csv_path.stat().st_mtime
-        return (time.time() - mtime) > max_age_sec
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        # stale lock cleanup (older than 1 hour)
+        try:
+            if time.time() - lock_path.stat().st_mtime > 3600:
+                lock_path.unlink(missing_ok=True)
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            else:
+                return False
+        except Exception:
+            return False
+    try:
+        os.write(fd, json.dumps({"pid": os.getpid(), "ts": time.time()}).encode("utf-8"))
+    finally:
+        os.close(fd)
+    return True
+
+def _unlock(lock_path: Path) -> None:
+    try:
+        lock_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+def is_stale(csv_path: Path) -> bool:
+    """
+    'Partial' signal for the app:
+    - CSV missing, or
+    - CSV older than TTL, or
+    - reviews.json exists but has < BACKFILL_TARGET/2 reviews (very early state)
+    """
+    if not csv_path.exists():
+        return True
+    try:
+        if (time.time() - csv_path.stat().st_mtime) > STALE_TTL_SECS:
+            return True
     except Exception:
         return True
 
-def csv_ready_or_kickoff(place_id: str) -> bool:
-    """
-    Returns True if we already have a CSV for this place_id.
-    If not, start background step 1 and return False immediately.
-    """
-    p = dish_csv_path(place_id)
-    if p.exists():
-        return True
-    kickoff_background_refresh(place_id)
+    try:
+        rj = csv_path.parent / "reviews.json"
+        if rj.exists():
+            n = 0
+            with rj.open("r", encoding="utf-8") as f:
+                # cheap line count: each review on its own line when pretty-printed
+                # (OK if not exact — just a heuristic)
+                for _ in f:
+                    n += 1
+            if n < (BACKFILL_TARGET // 2):
+                return True
+    except Exception:
+        pass
     return False
+
+def generate_csv_blocking(place_id: str) -> None:
+    """
+    Tiny, blocking first pass to guarantee a quick first response.
+    If a background job is already running (lock present), don't start another.
+    """
+    pdir = place_dir(place_id)
+    pdir.mkdir(parents=True, exist_ok=True)
+
+    lock = _lock_path(place_id)
+    if not _atomic_lock(lock):
+        # someone else is already building; just return and let the request read what's there
+        return
+    try:
+        cmd = [
+            str(Path(settings.BASE_DIR) / "manage.py"),
+            "scrape_reviews",
+            "--place_id", place_id,
+            "--target", str(FAST_TARGET),
+            "--time-budget", str(FAST_TIME_BUDGET),
+            "--fast",
+            "--append",
+        ]
+        env = os.environ.copy()
+        # make sure playwright uses the system path you installed to
+        env.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/var/www/.cache/ms-playwright")
+        env.setdefault("PLAYWRIGHT_NO_SANDBOX", "1")
+
+        # run via the project venv's python
+        py = Path(settings.BASE_DIR) / ".venv_ethnicolr" / "bin" / "python"
+        subprocess.run([str(py)] + cmd, cwd=str(Path(settings.BASE_DIR)),
+                       env=env, check=False, timeout=FAST_TIME_BUDGET + 30)
+    finally:
+        _unlock(lock)
+
+def ensure_csv_async(place_id: str) -> None:
+    """
+    Queues a low-priority backfill. Only one job per place at a time.
+    If lock exists → no-op. We do not wait.
+    """
+    lock = _lock_path(place_id)
+    if not _atomic_lock(lock):
+        return
+
+    cmd = [
+        str(Path(settings.BASE_DIR) / "manage.py"),
+        "scrape_reviews",
+        "--place_id", place_id,
+        "--target", str(BACKFILL_TARGET),
+        "--time-budget", str(BACKFILL_TIME_BUDGET),
+        "--append",
+    ]
+    env = os.environ.copy()
+    env.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/var/www/.cache/ms-playwright")
+    env.setdefault("PLAYWRIGHT_NO_SANDBOX", "1")
+    py = Path(settings.BASE_DIR) / ".venv_ethnicolr" / "bin" / "python"
+
+    # lower priority so it doesn't starve gunicorn
+    nice = ["nice", "-n", "10", "ionice", "-c", "3"]
+    subprocess.Popen(nice + [str(py)] + cmd,
+                     cwd=str(Path(settings.BASE_DIR)), env=env,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # lock will be cleared by the management command at the end (see below)

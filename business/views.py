@@ -20,7 +20,7 @@ from openai import OpenAI
 from django.conf     import settings
 from django.http     import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_GET
-from .utils.reviews_cache import dish_csv_path, is_stale, kickoff_background_refresh, csv_ready_or_kickoff
+from .utils.reviews_cache import dish_csv_path, is_stale
 from django.core.cache import cache
 import pandas as pd
 logger = logging.getLogger(__name__)

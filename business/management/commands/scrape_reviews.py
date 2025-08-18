@@ -1,4 +1,4 @@
-
+import gc
 from urllib.parse import urlparse, parse_qs
 
 from django.core.management.base import BaseCommand
@@ -46,160 +46,87 @@ class Command(BaseCommand):
     help = "Scrape Google Maps reviews for a place_id, then build dish_mentions for that place."
 
     def add_arguments(self, parser):
-        parser.add_argument("--place_id", "-p", required=True)
-        parser.add_argument("--target", type=int, default=200,
-                            help="Target number of reviews to collect (default 200)")
-        parser.add_argument("--time-budget", dest="time_budget", type=int, default=45,
-                            help="Hard time budget in seconds; return partial results when exceeded.")
-        parser.add_argument("--fast", action="store_true",
-                            help="Shorthand for --target 40 --time-budget 12")
-        parser.add_argument("--append", action="store_true",
-                            help="Resume from existing reviews.json instead of starting fresh.")
-        parser.add_argument("--out-dir", dest="out_dir", default=None,
-                            help="Optional output directory. Defaults to <REVIEWS_CACHE_DIR>/<place_id>")
+        parser.add_argument("-p", "--place_id", required=True)
+        parser.add_argument("--target", type=int, default=40)
+        parser.add_argument("--time-budget", type=int, default=12)
+        parser.add_argument("--out-dir")
+        parser.add_argument("--append", action="store_true")
+        parser.add_argument("--fast", action="store_true")
 
     def handle(self, *args, **options):
         place_id = options["place_id"]
-        target = int(options.get("target") or 40)
+        target = options["target"]
         time_budget = options["time_budget"]
-        append = bool(options.get("append"))
-
         if options["fast"]:
             target, time_budget = 40, 12
 
-        base_default = Path(getattr(
-            settings, "REVIEWS_CACHE_DIR",
-            Path(settings.BASE_DIR) / "var" / "reviews"
-        ))
-        out_dir = Path(options["out_dir"]) if options.get("out_dir") else (base_default / place_id)
+        default_base = Path(getattr(settings, "REVIEWS_CACHE_DIR",
+                                    Path(settings.BASE_DIR) / "var" / "reviews"))
+        out_dir = Path(options["out_dir"]) if options.get("out_dir") else (default_base / place_id)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Per-place lock to avoid stampede
-        lock = out_dir / ".refresh.lock"
-        if lock.exists():
-            # If another refresh is running recently, skip
-            try:
-                age = time.time() - lock.stat().st_mtime
-                if age < 600:  # 10 minutes safety
-                    self.stdout.write(f"[scrape_reviews] lock exists ({int(age)}s old) → skip")
-                    return
-            except Exception:
-                pass
-
+        # 1) Resolve Google Maps canonical URL
+        gmaps = GoogleMapsClient(key=settings.GOOGLE_API_KEY)
         try:
-            lock.write_text(f"pid={str(hash(place_id))} at {time.time():.0f}\n", encoding="utf-8")
+            resp = gmaps.place(place_id=place_id, fields=["url"])
+            place_url = resp["result"]["url"]
+        except Exception as e:
+            if "NOT_FOUND" in str(e):
+                self.stderr.write("❌ Place ID invalid, aborting.")
+                return
+            raise
 
-            # 1) Resolve canonical URL via Places API
-            gmaps = GoogleMapsClient(key=settings.GOOGLE_API_KEY)
-            try:
-                resp = gmaps.place(place_id=place_id, fields=["url"])
-                place_url = resp["result"]["url"]
-            except Exception as e:
-                if "NOT_FOUND" in str(e):
-                    self.stderr.write("❌ Place ID invalid, aborting.")
-                    return
-                raise
+        # 2) Canonicalize: force English and pin to ?cid=… if present
+        p = urlparse(place_url)
+        q = parse_qs(p.query)
+        if "cid" in q:
+            cid = q["cid"][0]
+            place_url = f"https://www.google.com/maps/place/?cid={cid}&hl=en"
+        else:
+            sep = "&" if "?" in place_url else "?"
+            place_url = f"{place_url}{sep}hl=en"
 
-            # 2) Canonicalize to cid and force English UI
-            p = urlparse(place_url)
-            q = parse_qs(p.query)
-            if "cid" in q:
-                cid = q["cid"][0]
-                place_url = f"https://www.google.com/maps/place/?cid={cid}&hl=en"
-            else:
-                sep = "&" if "?" in place_url else "?"
-                place_url = f"{place_url}{sep}hl=en"
+        # 3) Scrape (async)
+        asyncio.run(scrape_reviews(place_url=place_url, place_id=place_id,
+                                   target_reviews=target, time_budget=time_budget,
+                                   out_dir=out_dir))
 
-            # 3) Scrape with budget/target
-            asyncio.run(
-                scrape_reviews(
-                    place_url=place_url,
-                    place_id=place_id,
-                    target_reviews=target,
-                    time_budget=time_budget,
-                    out_dir=out_dir,
-                    append=append,
-                )
-            )
+        # 4) clear per-place lock (created by ensure_csv_async / generate)
+        (out_dir / ".refresh.lock").unlink(missing_ok=True)
 
-            # 4) After scrape, build authors + dishes inside this place dir
-            authors_csv_path = write_or_update_authors_csv(
-                str(out_dir / "reviews.json"),
-                str(out_dir / "authors.csv"),
-            )
-
-            prefer = out_dir / "dish_lexicon.csv"
-            fallback = Path(settings.BASE_DIR) / "data" / "dish_lexicon.csv"
-            lexicon_csv_path = str(prefer if prefer.exists() else fallback)
-
-            build_dish_mentions(
-                reviews_json=str(out_dir / "reviews.json"),
-                authors_csv=authors_csv_path,
-                lexicon_csv=lexicon_csv_path,
-                out_csv=str(out_dir / "dish_mentions.csv"),
-                save_raw_csv=str(out_dir / "dish_mentions_raw.csv"),
-                mode="both",
-            )
-        finally:
-            try:
-                lock.unlink(missing_ok=True)
-            except Exception:
-                pass
 def _norm_text(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
 
-async def scrape_reviews(
-        place_url: str,
-        place_id: str,
-        target_reviews: int,
-        time_budget: int,
-        out_dir: Path,
-        append: bool = False,
-):
-    """
-    Scrape up to target_reviews within time_budget seconds.
-    If append=True and reviews.json exists, resume from it (dedup by id/text).
-    Always writes to out_dir/reviews.json (pretty JSON).
-    """
-    # Seed from existing payload if resuming
-    reviews = []
-    seen_ids, seen_text = set(), set()
-    rj = out_dir / "reviews.json"
-    if append and rj.exists():
+async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_dir: Path):
+    # Playwright session
+    async with async_playwright() as p:
+        # launch chromium with minimal memory footprint
+        browser = await p.chromium.launch(
+            headless=True,
+            chromium_sandbox=False,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-crash-reporter",
+                "--single-process",
+            ],
+        )
+        context = await browser.new_context(locale="en-US")
         try:
-            reviews = json.loads(rj.read_text(encoding="utf-8"))
-            for r in reviews:
-                rid = (r.get("id") or "").strip()
-                txt = _norm_text(r.get("text") or "")
-                if rid:
-                    seen_ids.add(rid)
-                elif txt:
-                    seen_text.add(txt)
-            print(f"[resume] loaded {len(reviews)} existing reviews; seed ids={len(seen_ids)}, txt={len(seen_text)}")
-        except Exception as e:
-            print(f"[resume] failed to load existing reviews.json: {e}")
-
-    deadline = (time.perf_counter() + time_budget) if time_budget else None
-
-    browser = None
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context()
-
-            # Trim bandwidth
+            # Block heavy/irrelevant requests
             BLOCK_TYPES = {"image", "font", "stylesheet", "media"}
-            BLOCK_SNIPPETS = (
-                "/maps/vt", "lh3.googleusercontent.com", "ggpht.com",
-                "fonts.gstatic.com", ".woff", ".woff2", ".ttf",
-                "/gen_204", "/collect",
-            )
-
+            SNIPPETS = ("/maps/vt", "lh3.googleusercontent.com", "ggpht.com",
+                        "fonts.gstatic.com", ".woff", ".woff2", ".ttf",
+                        "/gen_204", "/collect")
             def _should_block(req):
                 if req.resource_type in BLOCK_TYPES:
                     return True
                 u = req.url
-                return any(s in u for s in BLOCK_SNIPPETS)
+                return any(s in u for s in SNIPPETS)
 
             await context.route("**/*", lambda r: r.abort() if _should_block(r.request) else r.continue_())
             page = await context.new_page()
@@ -211,7 +138,10 @@ async def scrape_reviews(
 
             await page.goto(place_url, wait_until="domcontentloaded")
 
-            # find scroll container
+            deadline = (time.perf_counter() + time_budget) if time_budget else None
+            total_reviews = target_reviews
+
+            # Find scroll container
             handle = await page.evaluate_handle(
                 """() => {
                     const card = document.querySelector("div[data-review-id]");
@@ -228,50 +158,48 @@ async def scrape_reviews(
 
             locator = page.locator('div[data-review-id]')
 
-            # prime a bit + open “Sort”
+            # Prime
             await locator.first.wait_for(state="visible", timeout=10_000)
             for _ in range(3):
                 await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.25)")
-                await page.wait_for_timeout(250)
+                await page.wait_for_timeout(300)
 
-            # “More reviews” click if visible
+            # 'More reviews'
             more_reviews = page.locator('text=/More reviews/').first
             if await more_reviews.count():
                 await more_reviews.scroll_into_view_if_needed()
                 await more_reviews.click()
-                await page.wait_for_timeout(400)
+                await page.wait_for_timeout(600)
 
-            # Sort by “Highest rating” (best signal for food recs)
+            # Sort → Highest rating
             try:
                 await page.get_by_role("button", name="Sort reviews").click()
                 menu = page.get_by_role("menu")
                 await menu.wait_for(state="visible", timeout=5_000)
                 await menu.get_by_role("menuitemradio", name="Highest rating").click()
-                await page.wait_for_timeout(200)
+                await page.wait_for_timeout(250)
             except Exception:
                 pass
 
-            # main loop
-            prev_count = 0
+            seen_ids: set[str] = set()
+            seen_text: set[str] = set()
+            reviews: list[dict] = []
+
             batch_size = 20
+            prev_count = 0
 
             while True:
-                # bail on time
-                if deadline and time.perf_counter() >= deadline:
-                    print("⏱️ time budget reached; returning partial results")
-                    break
-
                 curr_count = await locator.count()
                 if curr_count <= prev_count:
                     await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.6)")
-                    await page.wait_for_timeout(300)
+                    await page.wait_for_timeout(400)
                     curr_count = await locator.count()
                     if curr_count <= prev_count:
                         break
 
                 end = min(prev_count + batch_size, curr_count)
 
-                # expand "See more" within this slice
+                # expand “See more” within slice
                 await page.evaluate(
                     """([start,end]) => {
                         const cards = Array.from(document.querySelectorAll('div[data-review-id]')).slice(start,end);
@@ -283,19 +211,16 @@ async def scrape_reviews(
                     [prev_count, end]
                 )
 
-                # bulk extract id, author, text
+                # bulk extract
                 batch = await page.evaluate(
                     """([start,end]) => {
                         const out = [];
                         const cards = Array.from(document.querySelectorAll('div[data-review-id]')).slice(start,end);
                         for (const el of cards) {
                             const id = el.getAttribute('data-review-id') || "";
-                            // author priority: avatar aria-label "Photo of X"
                             let author = "";
                             const avatar = el.querySelector('button[aria-label^="Photo of "]');
-                            if (avatar) {
-                                author = (avatar.getAttribute('aria-label') || "").replace(/^Photo of\\s+/i, "").trim();
-                            }
+                            if (avatar) author = (avatar.getAttribute('aria-label') || "").replace(/^Photo of\\s+/i, "").trim();
                             if (!author) author = (el.getAttribute('aria-label') || "").trim();
                             if (!author) {
                                 const prof = el.querySelector('button[jsaction*="reviewerLink"] div');
@@ -312,41 +237,60 @@ async def scrape_reviews(
 
                 added = 0
                 for entry in batch:
-                    rid = (entry.get("id") or "").strip()
-                    txt = entry.get("text") or ""
-                    key_text = _norm_text(txt)
+                    rid  = entry.get("id") or ""
+                    text = entry.get("text") or ""
+                    key_text = _norm_text(text)
 
                     if rid:
-                        if rid in seen_ids:
-                            continue
+                        if rid in seen_ids: continue
                         seen_ids.add(rid)
                     else:
-                        if key_text in seen_text:
-                            continue
+                        if key_text in seen_text: continue
                         seen_text.add(key_text)
 
-                    # ensure author key exists even if blank
                     entry["author"] = entry.get("author") or ""
                     reviews.append(entry)
                     added += 1
 
-                # flush progressively
-                rj.write_text(json.dumps(reviews, indent=2), encoding="utf-8")
-
-                print(f"✅ Collected {len(reviews)}/{target_reviews} (added {added})  Δ={end - prev_count}")
+                (out_dir / "reviews.json").write_text(json.dumps(reviews, indent=2), encoding="utf-8")
+                print(f"✅ Collected {len(reviews)}/{total_reviews} reviews…")
 
                 prev_count = end
-                if len(reviews) >= target_reviews:
+                if len(reviews) >= total_reviews:
+                    break
+                if deadline and time.perf_counter() >= deadline:
+                    print("⏱️ time budget reached; returning partial results")
                     break
 
-            print(f"🎉 Collected {len(reviews)} total in {time.perf_counter() - t0:.2f}s")
-
-    finally:
-        if browser:
+        finally:
+            try:
+                await context.close()
+            except Exception:
+                pass
             try:
                 await browser.close()
             except Exception:
                 pass
+
+    # Aggregate outside the browser to keep memory low in the worker
+    authors_csv_path = write_or_update_authors_csv(
+        str(out_dir / "reviews.json"),
+        str(out_dir / "authors.csv"),
+    )
+
+    prefer = out_dir / "dish_lexicon.csv"
+    fallback = Path(settings.BASE_DIR) / "data" / "dish_lexicon.csv"
+    lexicon_csv_path = str(prefer if prefer.exists() else fallback)
+
+    build_dish_mentions(
+        reviews_json=str(out_dir / "reviews.json"),
+        authors_csv=authors_csv_path,
+        lexicon_csv=lexicon_csv_path,
+        out_csv=str(out_dir / "dish_mentions.csv"),
+        save_raw_csv=str(out_dir / "dish_mentions_raw.csv"),
+        mode="both",
+    )
+    gc.collect()
 
 # ---------- keys & mapping ----------
 def author_key_from_name(name: str) -> str:
