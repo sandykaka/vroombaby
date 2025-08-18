@@ -461,17 +461,8 @@ def restaurant_recommendations(request):
 
     # --- COLD MISS: do NOT block; fire a fast/background build and return partial ---
     if not csv_path.exists():
-        try:
-            # Prefer a fast kickoff if your helper supports it
-            try:
-                logger.info("COLD MISS %s — starting FAST build and returning partial", place_id)
-                ensure_csv_async(place_id, fast=True)   # new signature (if you added it)
-            except TypeError:
-                ensure_csv_async(place_id)              # fallback to older helper
-        except Exception:
-            pass  # never fail the request because a background kickoff errored
-
-        # Tell the client to poll
+        logger.info("COLD MISS %s — starting FAST build and returning partial", place_id)
+        ensure_csv_async(place_id, fast=True)
         return JsonResponse({"dishes": [], "partial": True})
 
     # --- WARM CACHE: consider this partial if stale or not yet "full" ---
@@ -479,13 +470,8 @@ def restaurant_recommendations(request):
 
     # Make sure a background refresh/backfill is running when needed
     if partial_flag:
-        try:
-            try:
-                ensure_csv_async(place_id, fast=False)
-            except TypeError:
-                ensure_csv_async(place_id)
-        except Exception:
-            pass
+        logger.info("WARM/PARTIAL %s — starting FULL backfill in background", place_id)
+        ensure_csv_async(place_id, fast=False)
 
     # App-level cache keyed by CSV mtime (fast path)
     try:
