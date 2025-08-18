@@ -1,6 +1,8 @@
 # reviews_cache.py
 from __future__ import annotations
 import json, os, subprocess, time
+import sys
+from datetime import datetime
 from pathlib import Path
 from django.conf import settings
 
@@ -56,94 +58,60 @@ def _unlock(lock_path: Path) -> None:
         pass
 
 def is_stale(csv_path: Path) -> bool:
-    """
-    'Partial' signal for the app:
-    - CSV missing, or
-    - CSV older than TTL, or
-    - reviews.json exists but has < BACKFILL_TARGET/2 reviews (very early state)
-    """
+    """Stale if missing, tiny, or old."""
     if not csv_path.exists():
         return True
     try:
-        if (time.time() - csv_path.stat().st_mtime) > STALE_TTL_SECS:
-            return True
+        df_rows = sum(1 for _ in open(csv_path, "r", encoding="utf-8")) - 1  # minus header
     except Exception:
+        df_rows = 0
+    if df_rows < 8:  # skinny → likely missing tabs
         return True
+    age = datetime.now().timestamp() - csv_path.stat().st_mtime
+    return age > 24 * 7 * 3600
 
+
+def generate_csv_blocking(place_id: str, fast: bool = True) -> None:
+    """Run your management command synchronously using the current interpreter."""
+    manage = Path(settings.BASE_DIR) / "manage.py"
+    cmd = [sys.executable, str(manage), "scrape_reviews", "--place_id", place_id]
+    if fast:
+        cmd.append("--fast")
+    env = os.environ.copy()
+    subprocess.check_call(cmd, cwd=str(settings.BASE_DIR), env=env)
+
+
+def kickoff_background_refresh(place_id: str, fast: bool = False) -> None:
+    """Fire-and-forget backfill using current interpreter (sys.executable)."""
+    pd = Path(getattr(settings, "REVIEWS_CACHE_DIR",
+                      Path(settings.BASE_DIR) / "var" / "reviews")) / place_id
+    pd.mkdir(parents=True, exist_ok=True)
+    lock = pd / ".refresh.lock"
+
+    # simple 10-min lock
     try:
-        rj = csv_path.parent / "reviews.json"
-        if rj.exists():
-            n = 0
-            with rj.open("r", encoding="utf-8") as f:
-                # cheap line count: each review on its own line when pretty-printed
-                # (OK if not exact — just a heuristic)
-                for _ in f:
-                    n += 1
-            if n < (BACKFILL_TARGET // 2):
-                return True
+        if lock.exists() and (datetime.now().timestamp() - lock.stat().st_mtime) < 600:
+            return
+        lock.write_text(datetime.now().isoformat(), encoding="utf-8")
     except Exception:
         pass
-    return False
 
-def generate_csv_blocking(place_id: str) -> None:
-    """
-    Tiny, blocking first pass to guarantee a quick first response.
-    If a background job is already running (lock present), don't start another.
-    """
-    pdir = place_dir(place_id)
-    pdir.mkdir(parents=True, exist_ok=True)
+    manage = Path(settings.BASE_DIR) / "manage.py"
+    cmd = [sys.executable, str(manage), "scrape_reviews", "--place_id", place_id]
+    if fast:
+        cmd.append("--fast")
 
-    lock = _lock_path(place_id)
-    if not _atomic_lock(lock):
-        # someone else is already building; just return and let the request read what's there
-        return
-    try:
-        cmd = [
-            str(Path(settings.BASE_DIR) / "manage.py"),
-            "scrape_reviews",
-            "--place_id", place_id,
-            "--target", str(FAST_TARGET),
-            "--time-budget", str(FAST_TIME_BUDGET),
-            "--fast",
-            "--append",
-        ]
-        env = os.environ.copy()
-        # make sure playwright uses the system path you installed to
-        env.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/var/www/.cache/ms-playwright")
-        env.setdefault("PLAYWRIGHT_NO_SANDBOX", "1")
-
-        # run via the project venv's python
-        py = Path(settings.BASE_DIR) / ".venv_ethnicolr" / "bin" / "python"
-        subprocess.run([str(py)] + cmd, cwd=str(Path(settings.BASE_DIR)),
-                       env=env, check=False, timeout=FAST_TIME_BUDGET + 30)
-    finally:
-        _unlock(lock)
+    env = os.environ.copy()
+    log_path = pd / "refresh.log"
+    with open(log_path, "ab", buffering=0) as log:
+        subprocess.Popen(
+            cmd,
+            cwd=str(settings.BASE_DIR),
+            env=env,
+            stdout=log,
+            stderr=log,
+            start_new_session=True,
+        )
 
 def ensure_csv_async(place_id: str) -> None:
-    """
-    Queues a low-priority backfill. Only one job per place at a time.
-    If lock exists → no-op. We do not wait.
-    """
-    lock = _lock_path(place_id)
-    if not _atomic_lock(lock):
-        return
-
-    cmd = [
-        str(Path(settings.BASE_DIR) / "manage.py"),
-        "scrape_reviews",
-        "--place_id", place_id,
-        "--target", str(BACKFILL_TARGET),
-        "--time-budget", str(BACKFILL_TIME_BUDGET),
-        "--append",
-    ]
-    env = os.environ.copy()
-    env.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/var/www/.cache/ms-playwright")
-    env.setdefault("PLAYWRIGHT_NO_SANDBOX", "1")
-    py = Path(settings.BASE_DIR) / ".venv_ethnicolr" / "bin" / "python"
-
-    # lower priority so it doesn't starve gunicorn
-    nice = ["nice", "-n", "10", "ionice", "-c", "3"]
-    subprocess.Popen(nice + [str(py)] + cmd,
-                     cwd=str(Path(settings.BASE_DIR)), env=env,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # lock will be cleared by the management command at the end (see below)
+    kickoff_background_refresh(place_id, fast=False)  # real backfill

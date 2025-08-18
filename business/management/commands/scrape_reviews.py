@@ -55,10 +55,12 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         place_id = options["place_id"]
-        target = options["target"]
-        time_budget = options["time_budget"]
-        if options["fast"]:
-            target, time_budget = 40, 12
+        target = int(options.get("target") or 0)
+        time_budget = int(options.get("time_budget") or 0)
+        if options.get("fast"):
+            target, time_budget = max(target, 40), max(time_budget, 15)
+        else:
+            target, time_budget = max(target, 200), max(time_budget, 90)
 
         default_base = Path(getattr(settings, "REVIEWS_CACHE_DIR",
                                     Path(settings.BASE_DIR) / "var" / "reviews"))
@@ -91,8 +93,12 @@ class Command(BaseCommand):
                                    target_reviews=target, time_budget=time_budget,
                                    out_dir=out_dir))
 
-        # 4) clear per-place lock (created by ensure_csv_async / generate)
-        (out_dir / ".refresh.lock").unlink(missing_ok=True)
+        # Clear lock if our run created it
+        lock = out_dir / ".refresh.lock"
+        try:
+            lock.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 def _norm_text(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip()).lower()

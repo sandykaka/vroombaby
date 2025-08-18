@@ -20,7 +20,7 @@ from openai import OpenAI
 from django.conf     import settings
 from django.http     import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_GET
-from .utils.reviews_cache import dish_csv_path, is_stale
+from .utils.reviews_cache import dish_csv_path, is_stale, generate_csv_blocking, ensure_csv_async
 from django.core.cache import cache
 import pandas as pd
 logger = logging.getLogger(__name__)
@@ -440,21 +440,21 @@ def restaurant_recommendations(request):
     eth = ethnicity.strip().lower()
     if eth not in TABS:
         return HttpResponseBadRequest("Invalid ethnicity")
-
+    # ----- DEBUG: bypass app cache if nocache=1 -----
+    bypass = request.GET.get("nocache") == "1"
     csv_path = dish_csv_path(place_id)
 
-    # Cold cache → DO NOT BLOCK. Kick off async and return partial immediately.
-    if not csv_ready_or_kickoff(place_id):
-        return JsonResponse({
-            "place_id": place_id,
-            "ethnicity": eth,
-            "dishes": [],
-            "partial": True,     # iOS: show spinner / "gathering…" and poll
-        })
+    # Cold cache → do a quick fast-pass build synchronously once
+    if not csv_path.exists():
+        try:
+            generate_csv_blocking(place_id, fast=True)
+        except Exception as e:
+            return JsonResponse({"place_id": place_id, "ethnicity": eth, "dishes": [], "partial": True,
+                                 "error": f"generate failed: {e}"}, status=500)
 
-    # Warm cache → serve now; if stale, nudge a background refresh.
+    # Warm cache → serve now; ensure a background backfill if stale/skinny
     if is_stale(csv_path):
-        kickoff_background_refresh(place_id)
+        ensure_csv_async(place_id)  # will no-op if a lock says job is running
 
     # App-level response cache keyed by CSV mtime (fast).
     try:
@@ -463,8 +463,10 @@ def restaurant_recommendations(request):
         mtime = 0
     cache_key = f"rr:{place_id}:{eth}:{mtime}"
     cached = cache.get(cache_key)
-    if cached is not None:
-        return JsonResponse(cached)
+    if not bypass:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return JsonResponse(cached)
 
     # Read current CSV
     try:
