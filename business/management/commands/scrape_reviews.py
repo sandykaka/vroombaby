@@ -1,4 +1,5 @@
 import gc
+import os
 from urllib.parse import urlparse, parse_qs
 
 from django.core.management.base import BaseCommand
@@ -41,6 +42,7 @@ FIELD_HEADERS = [
 ]
 
 TAB_LABELS = {"Indian","American","Chinese","Mexican","Italian"}
+AGG_INTERVAL = 40          # === NEW === build dish_mentions every N reviews
 
 class Command(BaseCommand):
     help = "Scrape Google Maps reviews for a place_id, then build dish_mentions for that place."
@@ -103,7 +105,47 @@ class Command(BaseCommand):
 def _norm_text(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
 
+def _safe_touch(p: Path):   # === NEW ===
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch(exist_ok=True)
+        os.utime(p, None)
+    except Exception:
+        pass
+
+def _aggregate_now(out_dir: Path, label: str = ""):  # === NEW ===
+    """
+    Rebuild authors.csv and dish_mentions.csv from current reviews.json.
+    Shield any exception so scraping can continue.
+    """
+    try:
+        reviews_json = str(out_dir / "reviews.json")
+        authors_csv  = str(out_dir / "authors.csv")
+
+        # authors (incremental if your helper supports it)
+        authors_csv_path = write_or_update_authors_csv(reviews_json, authors_csv)
+
+        # choose lexicon
+        prefer   = out_dir / "dish_lexicon.csv"
+        fallback = Path(settings.BASE_DIR) / "data" / "dish_lexicon.csv"
+        lexicon_csv_path = str(prefer if prefer.exists() else fallback)
+
+        # aggregate to dish_mentions.csv
+        build_dish_mentions(
+            reviews_json=reviews_json,
+            authors_csv=authors_csv_path,
+            lexicon_csv=lexicon_csv_path,
+            out_csv=str(out_dir / "dish_mentions.csv"),
+            save_raw_csv=str(out_dir / "dish_mentions_raw.csv"),
+            mode="both",
+        )
+        print(f"🟢 aggregated ({label}) → {out_dir/'dish_mentions.csv'}")
+    except Exception as e:
+        print(f"⚠️ aggregate failed ({label}): {e}")
+
 async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_dir: Path):
+    lock = out_dir / ".refresh.lock"
+    _safe_touch(lock)
     # Playwright session
     async with async_playwright() as p:
         # launch chromium with minimal memory footprint
@@ -278,24 +320,7 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
             except Exception:
                 pass
 
-    # Aggregate outside the browser to keep memory low in the worker
-    authors_csv_path = write_or_update_authors_csv(
-        str(out_dir / "reviews.json"),
-        str(out_dir / "authors.csv"),
-    )
-
-    prefer = out_dir / "dish_lexicon.csv"
-    fallback = Path(settings.BASE_DIR) / "data" / "dish_lexicon.csv"
-    lexicon_csv_path = str(prefer if prefer.exists() else fallback)
-
-    build_dish_mentions(
-        reviews_json=str(out_dir / "reviews.json"),
-        authors_csv=authors_csv_path,
-        lexicon_csv=lexicon_csv_path,
-        out_csv=str(out_dir / "dish_mentions.csv"),
-        save_raw_csv=str(out_dir / "dish_mentions_raw.csv"),
-        mode="both",
-    )
+    _aggregate_now(out_dir, label="final")
     gc.collect()
 
 # ---------- keys & mapping ----------

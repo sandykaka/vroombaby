@@ -23,6 +23,8 @@ from django.views.decorators.http import require_GET
 from .utils.reviews_cache import dish_csv_path, is_stale, generate_csv_blocking, ensure_csv_async
 from django.core.cache import cache
 import pandas as pd
+from pathlib import Path
+
 logger = logging.getLogger(__name__)
 
 def index(request):
@@ -430,6 +432,17 @@ gmaps = googlemaps.Client(key=settings.GOOGLE_API_KEY)
 client  = OpenAI(api_key=settings.OPENAI_API_KEY)
 TABS = {"indian","american","chinese","mexican","italian"}
 
+
+FULL_TARGET = 200  # what we consider a "complete" backfill
+
+def _has_enough_rows(csv_path: Path, need: int = FULL_TARGET) -> bool:
+    """Cheap line-count (header excluded)."""
+    try:
+        with csv_path.open("r", encoding="utf-8") as f:
+            return max(sum(1 for _ in f) - 1, 0) >= need
+    except Exception:
+        return False
+
 @require_GET
 def restaurant_recommendations(request):
     place_id = request.GET.get("place_id")
@@ -437,52 +450,67 @@ def restaurant_recommendations(request):
     if not place_id or not ethnicity:
         return HttpResponseBadRequest("Missing place_id or ethnicity")
 
-    eth = ethnicity.strip().lower()
+    eth = (ethnicity or "").strip().lower()
     if eth not in TABS:
         return HttpResponseBadRequest("Invalid ethnicity")
-    # ----- DEBUG: bypass app cache if nocache=1 -----
-    bypass = request.GET.get("nocache") == "1"
+
+    # Optional: bypass app-level cache for debugging
+    bypass = (request.GET.get("nocache") == "1")
+
     csv_path = dish_csv_path(place_id)
 
-    # Cold cache → do a quick fast-pass build synchronously once
+    # --- COLD MISS: do NOT block; fire a fast/background build and return partial ---
     if not csv_path.exists():
         try:
-            generate_csv_blocking(place_id, fast=True)
-        except Exception as e:
-            return JsonResponse({"place_id": place_id, "ethnicity": eth, "dishes": [], "partial": True,
-                                 "error": f"generate failed: {e}"}, status=500)
+            # Prefer a fast kickoff if your helper supports it
+            try:
+                ensure_csv_async(place_id, fast=True)   # new signature (if you added it)
+            except TypeError:
+                ensure_csv_async(place_id)              # fallback to older helper
+        except Exception:
+            pass  # never fail the request because a background kickoff errored
 
-    # Warm cache → serve now; ensure a background backfill if stale/skinny
-    if is_stale(csv_path):
-        ensure_csv_async(place_id)  # will no-op if a lock says job is running
+        # Tell the client to poll
+        return JsonResponse({"dishes": [], "partial": True})
 
-    # App-level response cache keyed by CSV mtime (fast).
+    # --- WARM CACHE: consider this partial if stale or not yet "full" ---
+    partial_flag = is_stale(csv_path) or (not _has_enough_rows(csv_path, FULL_TARGET))
+
+    # Make sure a background refresh/backfill is running when needed
+    if partial_flag:
+        try:
+            try:
+                ensure_csv_async(place_id, fast=False)
+            except TypeError:
+                ensure_csv_async(place_id)
+        except Exception:
+            pass
+
+    # App-level cache keyed by CSV mtime (fast path)
     try:
         mtime = int(csv_path.stat().st_mtime)
     except Exception:
         mtime = 0
     cache_key = f"rr:{place_id}:{eth}:{mtime}"
-    cached = cache.get(cache_key)
     if not bypass:
         cached = cache.get(cache_key)
         if cached is not None:
             return JsonResponse(cached)
 
-    # Read current CSV
+    # Read the current CSV snapshot; if it fails, keep the client polling
     try:
-        df = pd.read_csv(csv_path, dtype={"ethnicity_ui":"string","dish":"string"})
-    except Exception as e:
-        # If read fails, tell client to keep polling rather than exploding HTML
-        return JsonResponse({"place_id": place_id, "ethnicity": eth, "dishes": [], "partial": True})
+        df = pd.read_csv(csv_path, dtype={"ethnicity_ui": "string", "dish": "string"})
+    except Exception:
+        return JsonResponse({"dishes": [], "partial": True})
 
     if df.empty:
-        payload = {"place_id": place_id, "ethnicity": eth, "dishes": [], "partial": True}
+        payload = {"dishes": [], "partial": True}
         cache.set(cache_key, payload, timeout=120)
         return JsonResponse(payload)
 
     sub = df[df["ethnicity_ui"].str.lower() == eth]
     if sub.empty:
-        payload = {"place_id": place_id, "ethnicity": eth, "dishes": [], "partial": False}
+        payload = {"dishes": [], "partial": partial_flag}
         cache.set(cache_key, payload, timeout=120)
         return JsonResponse(payload)
 
@@ -498,8 +526,6 @@ def restaurant_recommendations(request):
         "from_recommended": bool(r["from_recommended"]) if pd.notna(r["from_recommended"]) else False,
     } for _, r in sub.iterrows()]
 
-    payload = {"dishes": dishes, "partial": is_stale(csv_path)}
-
+    payload = {"dishes": dishes, "partial": partial_flag}
     cache.set(cache_key, payload, timeout=180)
     return JsonResponse(payload)
-
