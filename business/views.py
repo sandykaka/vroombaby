@@ -20,7 +20,8 @@ from openai import OpenAI
 from django.conf     import settings
 from django.http     import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_GET
-from .utils.reviews_cache import dish_csv_path, is_stale, generate_csv_blocking, ensure_csv_async
+from .utils.reviews_cache import dish_csv_path, is_stale, generate_csv_blocking, ensure_csv_async, has_enough_reviews, \
+    FULL_TARGET
 from django.core.cache import cache
 import pandas as pd
 from pathlib import Path
@@ -433,19 +434,9 @@ client  = OpenAI(api_key=settings.OPENAI_API_KEY)
 TABS = {"indian","american","chinese","mexican","italian"}
 
 
-FULL_TARGET = 200  # what we consider a "complete" backfill
-
-def _has_enough_rows(csv_path: Path, need: int = FULL_TARGET) -> bool:
-    """Cheap line-count (header excluded)."""
-    try:
-        with csv_path.open("r", encoding="utf-8") as f:
-            return max(sum(1 for _ in f) - 1, 0) >= need
-    except Exception:
-        return False
-
 @require_GET
 def restaurant_recommendations(request):
-    place_id = request.GET.get("place_id")
+    place_id  = request.GET.get("place_id")
     ethnicity = request.GET.get("ethnicity")
     if not place_id or not ethnicity:
         return HttpResponseBadRequest("Missing place_id or ethnicity")
@@ -454,26 +445,24 @@ def restaurant_recommendations(request):
     if eth not in TABS:
         return HttpResponseBadRequest("Invalid ethnicity")
 
-    # Optional: bypass app-level cache for debugging
     bypass = (request.GET.get("nocache") == "1")
 
     csv_path = dish_csv_path(place_id)
 
-    # --- COLD MISS: do NOT block; fire a fast/background build and return partial ---
+    # COLD MISS: do NOT block — start a FAST build once, return partial
     if not csv_path.exists():
-        logger.info("COLD MISS %s — starting FAST build and returning partial", place_id)
+        logger.info("COLD MISS %s — launching FAST", place_id)
         ensure_csv_async(place_id, fast=True)
         return JsonResponse({"dishes": [], "partial": True})
 
-    # --- WARM CACHE: consider this partial if stale or not yet "full" ---
-    partial_flag = is_stale(csv_path) or (not _has_enough_rows(csv_path, FULL_TARGET))
+    # Decide if current snapshot is partial (not enough reviews or stale)
+    partial_flag = (not has_enough_reviews(place_id, FULL_TARGET)) or is_stale(csv_path)
 
-    # Make sure a background refresh/backfill is running when needed
+    # If partial → schedule at most one FULL in background (atomic lock + cooldown prevent storms)
     if partial_flag:
-        logger.info("WARM/PARTIAL %s — starting FULL backfill in background", place_id)
         ensure_csv_async(place_id, fast=False)
 
-    # App-level cache keyed by CSV mtime (fast path)
+    # Quick app cache keyed by CSV mtime
     try:
         mtime = int(csv_path.stat().st_mtime)
     except Exception:
@@ -484,7 +473,7 @@ def restaurant_recommendations(request):
         if cached is not None:
             return JsonResponse(cached)
 
-    # Read the current CSV snapshot; if it fails, keep the client polling
+    # Read current CSV snapshot
     try:
         df = pd.read_csv(csv_path, dtype={"ethnicity_ui": "string", "dish": "string"})
     except Exception:
@@ -510,7 +499,7 @@ def restaurant_recommendations(request):
         "name": str(r["dish"]),
         "people": int(r["unique_authors"]) if pd.notna(r["unique_authors"]) else 0,
         "mentions": int(r["mentions"]) if pd.notna(r["mentions"]) else 0,
-        "from_recommended": bool(r["from_recommended"]) if pd.notna(r["from_recommended"]) else False,
+        "from_recommended": bool(r.get("from_recommended", False)) if pd.notna(r.get("from_recommended", False)) else False,
     } for _, r in sub.iterrows()]
 
     payload = {"dishes": dishes, "partial": partial_flag}

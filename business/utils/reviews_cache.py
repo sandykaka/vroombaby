@@ -13,10 +13,11 @@ FAST_TARGET = 40
 FAST_TIME_BUDGET = 12           # keeps first response snappy
 BACKFILL_TARGET = 220
 BACKFILL_TIME_BUDGET = 45
-STALE_TTL_SECS = 15 * 60        # if CSV older than this, treat as partial
+STALE_TTL_S = 6 * 3600        # if CSV older than this, treat as partial
 FULL_TARGET   = getattr(settings, "REVIEWS_TARGET",       200)
 FULL_BUDGET   = getattr(settings, "REVIEWS_FULL_BUDGET",   90)
 LOCK_STALE_S  = getattr(settings, "REVIEWS_LOCK_STALE_S", 900)  # 15 min
+COOLDOWN_FULL_S    = 15 * 60     # don’t launch FULL more often than this
 
 def place_dir(place_id: str) -> Path:
     base = Path(getattr(settings, "REVIEWS_CACHE_DIR",
@@ -34,29 +35,35 @@ def reviews_json_path(place_id: str) -> Path:
 def _lock_path(place_id: str) -> Path:
     return place_dir(place_id) / ".refresh.lock"
 
-def _atomic_lock(lock_path: Path) -> bool:
+def _atomic_lock(lock_path: Path, ttl_s: int) -> bool:
     """
-    Returns True if we created the lock, False if it already existed.
-    The lock file contains JSON with pid and ts.
+    Try to create a lock atomically. Return True if we acquired it.
+    If an existing lock is fresh (< ttl_s), return False.
+    If stale, remove and retry once.
     """
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    # existing?
+    if lock_path.exists():
+        try:
+            if now - lock_path.stat().st_mtime < ttl_s:
+                return False
+            # stale – remove
+            lock_path.unlink(missing_ok=True)
+        except Exception:
+            # if we can’t stat/unlink, fall through and try EXCL create
+            pass
+
+    fd = None
     try:
         fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        os.write(fd, str(os.getpid()).encode("utf-8"))
+        return True
     except FileExistsError:
-        # stale lock cleanup (older than 1 hour)
-        try:
-            if time.time() - lock_path.stat().st_mtime > 3600:
-                lock_path.unlink(missing_ok=True)
-                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            else:
-                return False
-        except Exception:
-            return False
-    try:
-        os.write(fd, json.dumps({"pid": os.getpid(), "ts": time.time()}).encode("utf-8"))
+        # someone else won the race
+        return False
     finally:
-        os.close(fd)
-    return True
+        if fd is not None:
+            os.close(fd)
 
 def _unlock(lock_path: Path) -> None:
     try:
@@ -69,6 +76,19 @@ def is_stale(csv_path: Path) -> bool:
         return (time.time() - csv_path.stat().st_mtime) > 3600
     except FileNotFoundError:
         return True
+
+def _reviews_count(place_id: str) -> int:
+    p = reviews_json_path(place_id)
+    if not p.exists():
+        return 0
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return len(data) if isinstance(data, list) else 0
+    except Exception:
+        return 0
+
+def has_enough_reviews(place_id: str, target: int) -> bool:
+    return _reviews_count(place_id) >= int(target)
 
 
 def generate_csv_blocking(place_id: str, fast: bool = True) -> None:
@@ -83,26 +103,32 @@ def generate_csv_blocking(place_id: str, fast: bool = True) -> None:
 
 
 def ensure_csv_async(place_id: str, fast: bool = False) -> bool:
-    """Spawn manage.py scrape_reviews in the background.
-       Returns True if a job was started, False if a fresh lock existed."""
+    """
+    Spawn manage.py scrape_reviews in the background for this place.
+    - Uses an atomic lock (.refresh.lock) to prevent concurrent runs
+    - Uses a cooldown file (.cooldown_full) to avoid repeated FULL launches
+    Returns True if a job was started, False otherwise.
+    """
     d = place_dir(place_id)
     lock = d / ".refresh.lock"
+    cooldown = d / ".cooldown_full"
+    log_path = d / "scrape.log"
 
-    # Respect a fresh lock
-    if lock.exists():
+    # FULL cooldown guard
+    if not fast and cooldown.exists():
         try:
-            if time.time() - lock.stat().st_mtime < LOCK_STALE_S:
+            if time.time() - cooldown.stat().st_mtime < COOLDOWN_FULL_S:
+                print("Cooldown active for %s; skipping FULL launch", place_id)
                 return False
         except Exception:
             pass
-        # stale lock — remove it
-        try: lock.unlink()
-        except Exception: pass
 
-    # create/refresh the lock
-    lock.write_text(str(os.getpid()))
+    # atomic lock guard
+    if not _atomic_lock(lock, LOCK_STALE_S):
+        print("Lock present for %s; skipping spawn (fast=%s)", place_id, fast)
+        return False
 
-    log_path = d / "scrape.log"
+    # build command
     cmd = [
         sys.executable,
         str(Path(settings.BASE_DIR) / "manage.py"),
@@ -116,6 +142,13 @@ def ensure_csv_async(place_id: str, fast: bool = False) -> bool:
 
     env = os.environ.copy()
     env.setdefault("DJANGO_SETTINGS_MODULE", env.get("DJANGO_SETTINGS_MODULE", ""))
+
+    # mark cooldown immediately for FULL (so rapid polls don’t stack jobs)
+    if not fast:
+        try:
+            cooldown.touch()
+        except Exception:
+            pass
 
     with open(log_path, "a", buffering=1) as out:
         out.write(f"\n[{time.strftime('%F %T')}] start: {'FAST' if fast else 'FULL'} -> {' '.join(cmd)}\n")
