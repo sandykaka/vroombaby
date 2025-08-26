@@ -146,6 +146,28 @@ def _aggregate_now(out_dir: Path, label: str = ""):  # === NEW ===
 async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_dir: Path):
     lock = out_dir / ".refresh.lock"
     _safe_touch(lock)
+
+    # ---- Seed from previous run if present ----
+    seed_reviews: list[dict] = []
+    seed_seen_ids: set[str] = set()
+    seed_seen_text: set[str] = set()
+    seed_seen_count = 0
+    seed_path = out_dir / "reviews.json"
+    if seed_path.exists():
+        try:
+            seed_reviews = json.loads(seed_path.read_text(encoding="utf-8"))
+            for r in seed_reviews:
+                rid = (r or {}).get("id") or ""
+                txt = (r or {}).get("text") or ""
+                if rid:
+                    seed_seen_ids.add(rid)
+                elif txt:
+                    seed_seen_text.add(_norm_text(txt))
+            seed_seen_count = len(seed_seen_ids) + len(seed_seen_text)
+            print(f"↩️  Seeding with {len(seed_reviews)} prior reviews (unique keys ≈ {seed_seen_count})")
+        except Exception as e:
+            print(f"⚠️  Seed load failed: {e}")
+
     # Playwright session
     async with async_playwright() as p:
         # launch chromium with minimal memory footprint
@@ -187,7 +209,7 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
             await page.goto(place_url, wait_until="domcontentloaded")
 
             deadline = (time.perf_counter() + time_budget) if time_budget else None
-            total_reviews = target_reviews
+            total_reviews = max(int(target_reviews or 0), seed_seen_count)
 
             # Find scroll container
             handle = await page.evaluate_handle(
@@ -199,7 +221,6 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
                     return c || document.scrollingElement;
                 }"""
             )
-            t0 = time.perf_counter()
             scroll_el = handle.as_element()
             tag = await scroll_el.evaluate("(el) => el.tagName")
             print(f"✅ Using scroll container: {tag}")
@@ -229,12 +250,29 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
             except Exception:
                 pass
 
-            seen_ids: set[str] = set()
-            seen_text: set[str] = set()
-            reviews: list[dict] = []
+            # ---- Use seeds to skip top slice on FULL ----
+            prev_count = 0
+            if seed_seen_count and total_reviews > seed_seen_count:
+                loaded = await locator.count()
+                attempts = 0
+                while loaded < seed_seen_count and attempts < 25:
+                    await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.9)")
+                    await page.wait_for_timeout(250)
+                    new_loaded = await locator.count()
+                    # track if we're not progressing to avoid infinite loop
+                    if new_loaded <= loaded:
+                        attempts += 1
+                    loaded = new_loaded
+                prev_count = min(loaded, seed_seen_count)
+                if prev_count:
+                    print(f"⏩ Fast-forwarded to ~{prev_count} cards (seed={seed_seen_count})")
+
+            # --- DEDUPE + ROBUST AUTHOR (seeded) ---
+            seen_ids: set[str] = set(seed_seen_ids)
+            seen_text: set[str] = set(seed_seen_text)
+            reviews: list[dict] = list(seed_reviews)
 
             batch_size = 20
-            prev_count = 0
 
             while True:
                 curr_count = await locator.count()

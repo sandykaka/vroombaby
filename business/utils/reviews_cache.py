@@ -9,7 +9,7 @@ from django.conf import settings
 REVIEWS_DIR = Path(getattr(settings, "REVIEWS_CACHE_DIR",
                            Path(settings.BASE_DIR) / "var" / "reviews"))
 
-FAST_TARGET = 40
+FAST_TARGET = 30
 FAST_TIME_BUDGET = 12           # keeps first response snappy
 BACKFILL_TARGET = 220
 BACKFILL_TIME_BUDGET = 45
