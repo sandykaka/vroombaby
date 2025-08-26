@@ -42,7 +42,6 @@ FIELD_HEADERS = [
 ]
 
 TAB_LABELS = {"Indian","American","Chinese","Mexican","Italian"}
-AGG_INTERVAL = 40          # === NEW === build dish_mentions every N reviews
 
 class Command(BaseCommand):
     help = "Scrape Google Maps reviews for a place_id, then build dish_mentions for that place."
@@ -60,7 +59,7 @@ class Command(BaseCommand):
         target = int(options.get("target") or 0)
         time_budget = int(options.get("time_budget") or 0)
         if options.get("fast"):
-            target, time_budget = max(target, 40), max(time_budget, 15)
+            target, time_budget = max(target, 24), max(time_budget, 10)
         else:
             target, time_budget = max(target, 200), max(time_budget, 90)
 
@@ -185,7 +184,11 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
                 "--single-process",
             ],
         )
-        context = await browser.new_context(locale="en-US")
+        context = await browser.new_context(
+            locale="en-US",
+            viewport={"width": 800, "height": 600},  # smaller layout surface
+            device_scale_factor=1.0
+        )
         try:
             # Block heavy/irrelevant requests
             BLOCK_TYPES = {"image", "font", "stylesheet", "media"}
