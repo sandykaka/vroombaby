@@ -158,7 +158,7 @@ def _has_recent_job(place_id: str, queue_dir: Path, ttl_s: int) -> bool:
             pass
     return False
 
-def ensure_csv_async(place_id: str, fast: bool, queue_dir: QUEUE_DIR, dedupe_ttl_s: int = DEDUP_TTL_S) -> bool:
+def ensure_csv_async(place_id: str, fast: bool, queue_dir = QUEUE_DIR, dedupe_ttl_s: int = DEDUP_TTL_S) -> bool:
     """
     Enqueue a scrape job. We do NOT touch the .refresh.lock here.
     We dedupe by scanning the queue for recent jobs for the same place_id.
