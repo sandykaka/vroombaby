@@ -29,7 +29,7 @@ FULL_BUDGET   = 90
 
 STALE_SECONDS = 7 * 24 * 60 * 60    # 7 days
 LOCK_STALE_S  = 20 * 60             # 20 minutes
-DEDUP_TTL_S   = 15 * 60             # 15 minutes
+DEDUP_TTL_S   = 2 * 60             # 2 minutes
 
 def place_dir(place_id: str) -> Path:
 
