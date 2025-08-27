@@ -37,6 +37,10 @@ def place_dir(place_id: str) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     return d
 
+
+def has_enough_reviews(place_id: str, target: int) -> bool:
+    return _reviews_count(place_id) >= int(target)
+
 def list_jobs(queue_dir: Path):
     jobs = []
     for p in queue_dir.glob("*.json"):
@@ -184,39 +188,79 @@ def _acquire_enqueue_lock(dirpath: Path, ttl_s: int) -> bool:
         except Exception:
             return False
 
-def ensure_csv_async(place_id: str, fast: bool, queue_dir: Path = QUEUE_DIR,
-                     dedupe_ttl_s: int = DEDUP_TTL_S) -> bool:
+def ensure_csv_async(
+        place_id: str,
+        fast: bool,
+        queue_dir: Path = QUEUE_DIR,
+        dedupe_ttl_s: int = DEDUP_TTL_S
+) -> bool:
     """
-    Enqueue a FAST or FULL scrape job if there's not a recent pending job.
-    IMPORTANT: Do NOT touch .refresh.lock here. Locks are owned by the scraper process.
+    Queue a scrape job if needed.
+    - Does NOT create the .refresh.lock (the worker/scraper owns the lock).
+    - De-dupes against pending jobs in queue_dir.
     """
-    queue_dir.mkdir(parents=True, exist_ok=True)
+    d = place_dir(place_id)
+    d.mkdir(parents=True, exist_ok=True)
 
-    # 1) Queue-level dedupe: if a recent pending job exists for this place, skip enqueue
-    try:
-        pending = list(queue_dir.glob(f"{place_id}.*.json"))
-        if pending:
-            newest = max(pending, key=lambda p: p.stat().st_mtime)
-            age = time.time() - newest.stat().st_mtime
-            if age < dedupe_ttl_s:
-                # recent pending job → skip
-                logger.info("⏳ pending job for %s (%.1fs old), skip enqueue", place_id, age)
+    lock = d / ".refresh.lock"
+    # If a real scrape is running (fresh lock), don't enqueue anything.
+    if lock.exists():
+        try:
+            age = time.time() - lock.stat().st_mtime
+            if age < LOCK_STALE_S:
+                logger.info("🔒 fresh lock for %s (%.1fs) — skip enqueue", place_id, age)
                 return False
-            else:
-                # stale pending jobs → clean them up
-                for p in pending:
-                    try: p.unlink()
-                    except Exception: pass
-    except Exception:
-        # non-fatal
-        pass
+        except Exception:
+            pass
+        # stale lock → clean up
+        try:
+            lock.unlink()
+        except Exception:
+            pass
 
-    # 2) Build job payload
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+
+    def _young_pending(glob_pat: str) -> bool:
+        """Return True if there is a pending .json job younger than the dedupe TTL."""
+        found = False
+        for f in queue_dir.glob(glob_pat):
+            found = True
+            try:
+                # filenames: <place>.<mode>.<epoch>.json
+                ts = int(f.name.split(".")[-2])
+                if now - ts < dedupe_ttl_s:
+                    return True
+            except Exception:
+                # if we can’t parse ts, be conservative and treat as young
+                return True
+        return False if not found else False
+
+    # If we're about to enqueue FULL:
+    #  - Prefer FULL over FAST → remove any pending FAST jobs for this place.
+    #  - If a young FULL is pending, skip enqueue.
+    if not fast:
+        for f in queue_dir.glob(f"{place_id}.fast.*.json"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+        if _young_pending(f"{place_id}.full.*.json"):
+            logger.info("⏳ pending FULL for %s — skip enqueue", place_id)
+            return False
+    else:
+        # If FULL is pending, don't enqueue FAST.
+        if any(queue_dir.glob(f"{place_id}.full.*.json")):
+            logger.info("⏳ FULL already pending for %s — skip FAST", place_id)
+            return False
+        if _young_pending(f"{place_id}.fast.*.json"):
+            logger.info("⏳ pending FAST for %s — skip enqueue", place_id)
+            return False
+
     mode   = "fast" if fast else "full"
-    target = 40 if fast else FULL_TARGET
-    budget = 15 if fast else FULL_BUDGET
+    target = FAST_TARGET if fast else FULL_TARGET
+    budget = FAST_BUDGET if fast else FULL_BUDGET
 
-    # 3) Enqueue
     job_path = enqueue_scrape_job(place_id, mode=mode, target=target, budget=budget, queue_dir=queue_dir)
     logger.info("📥 ENQUEUED %s job %s → %s", mode.upper(), place_id, job_path)
     return True

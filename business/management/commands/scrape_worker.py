@@ -5,7 +5,8 @@ from django.conf import settings
 from pathlib import Path
 import os, sys, time, json, logging, subprocess
 
-from business.utils.reviews_cache import place_dir, pick_next, list_jobs
+from business.utils.reviews_cache import place_dir, pick_next, list_jobs, has_enough_reviews, FAST_TARGET, is_stale, \
+    dish_csv_path
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,23 @@ class Command(BaseCommand):
                 else:
                     try: lock.unlink()
                     except Exception: pass
+
+                # ✅ Skip FAST if we already have enough
+            if mode == "fast" and has_enough_reviews(place_id, FAST_TARGET):
+                logger.info("Skip FAST for %s — already have ≥%d reviews. Deleting job %s",
+                            place_id, FAST_TARGET, job_path.name)
+                job_path.unlink(missing_ok=True)
+                # clear any leftover lock so future jobs can run
+                lock.unlink(missing_ok=True)
+                continue
+
+            # ✅ Skip FULL if we’re complete AND fresh
+            if mode == "full" and has_enough_reviews(place_id, FULL_TARGET) and not is_stale(dish_csv_path(place_id)):
+                logger.info("Skip FULL for %s — complete & fresh. Deleting job %s",
+                            place_id, job_path.name)
+                job_path.unlink(missing_ok=True)
+                lock.unlink(missing_ok=True)
+                continue
 
             # claim lock
             try:
