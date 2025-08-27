@@ -158,18 +158,79 @@ def _has_recent_job(place_id: str, queue_dir: Path, ttl_s: int) -> bool:
             pass
     return False
 
+def _acquire_enqueue_lock(dirpath: Path, ttl_s: int) -> bool:
+    """
+    Create dirpath/.enqueue.lock atomically (O_EXCL).
+    If it exists and is fresh (< ttl_s), do not acquire.
+    If it exists but stale, replace it.
+    """
+    dirpath.mkdir(parents=True, exist_ok=True)
+    f = dirpath / ".enqueue.lock"
+    now = time.time()
+
+    try:
+        fd = os.open(str(f), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            age = now - f.stat().st_mtime
+            if age < ttl_s:
+                return False
+            f.unlink(missing_ok=True)
+            fd = os.open(str(f), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return True
+        except Exception:
+            return False
+
 def ensure_csv_async(place_id: str, fast: bool, queue_dir = QUEUE_DIR, dedupe_ttl_s: int = DEDUP_TTL_S) -> bool:
     """
-    Enqueue a scrape job. We do NOT touch the .refresh.lock here.
-    We dedupe by scanning the queue for recent jobs for the same place_id.
+    Returns True if we enqueued a job, False if we skipped due to lock/cooldown/pending job.
     """
-    if _has_recent_job(place_id, queue_dir, dedupe_ttl_s):
-        logger.info("🧊 queue-dedupe %s: recent job exists; skipping enqueue", place_id)
+    d = place_dir(place_id)
+    d.mkdir(parents=True, exist_ok=True)
+
+    # 0) Pending job in queue? (skip if any recent job file for this place)
+    now = time.time()
+    try:
+        for jf in queue_dir.glob(f"{place_id}.*.json"):
+            if now - jf.stat().st_mtime < dedupe_ttl_s:
+                logger.info("🛑 pending job for %s (%.1fs old), skip enqueue", place_id, now - jf.stat().st_mtime)
+                return False
+    except Exception:
+        pass
+
+    # 1) Enqueue-rate lock (atomic; collapses near-simultaneous enqueues)
+    if not _acquire_enqueue_lock(d, dedupe_ttl_s):
+        logger.info("🛑 enqueue cooldown for %s; skip", place_id)
         return False
+
+    # 2) Worker freshness lock (if a worker *already* owns the place, don't enqueue)
+    lock = d / ".refresh.lock"
+    try:
+        if lock.exists() and (now - lock.stat().st_mtime) < LOCK_STALE_S:
+            logger.info("🔒 skip enqueue %s (fresh worker lock)", place_id)
+            # touch enqueue lock so its age reflects this decision
+            (d / ".enqueue.lock").touch()
+            return False
+        if lock.exists():
+            lock.unlink(missing_ok=True)  # stale
+    except Exception:
+        pass
+
+    # 3) Mark worker lock and enqueue
+    try:
+        lock.write_text(str(os.getpid()))
+    except Exception:
+        pass
 
     mode   = "fast" if fast else "full"
     target = 40 if fast else FULL_TARGET
     budget = 15 if fast else FULL_BUDGET
+
     job_path = enqueue_scrape_job(place_id, mode=mode, target=target, budget=budget, queue_dir=queue_dir)
-    logger.info("📥 ENQUEUED %s %s → %s", mode.upper(), place_id, job_path.name)
+    logger.info("📥 ENQUEUED %s job %s → %s", mode.upper(), place_id, job_path)
+
+    # Leave .enqueue.lock in place; it will be removed (or age out) by the worker completion below.
     return True

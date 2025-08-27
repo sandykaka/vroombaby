@@ -362,6 +362,16 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
 
     # Aggregate outside the browser to keep memory low in the worker
     _aggregate_now(out_dir, label="final")
+    # clear locks so future enqueues are allowed
+    try:
+        (out_dir / ".refresh.lock").unlink(missing_ok=True)
+    except Exception:
+        pass
+    try:
+        (out_dir / ".enqueue.lock").unlink(missing_ok=True)
+    except Exception:
+        pass
+
     gc.collect()
 
 
