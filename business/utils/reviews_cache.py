@@ -184,53 +184,39 @@ def _acquire_enqueue_lock(dirpath: Path, ttl_s: int) -> bool:
         except Exception:
             return False
 
-def ensure_csv_async(place_id: str, fast: bool, queue_dir = QUEUE_DIR, dedupe_ttl_s: int = DEDUP_TTL_S) -> bool:
+def ensure_csv_async(place_id: str, fast: bool, queue_dir: Path = QUEUE_DIR,
+                     dedupe_ttl_s: int = DEDUP_TTL_S) -> bool:
     """
-    Returns True if we enqueued a job, False if we skipped due to lock/cooldown/pending job.
+    Enqueue a FAST or FULL scrape job if there's not a recent pending job.
+    IMPORTANT: Do NOT touch .refresh.lock here. Locks are owned by the scraper process.
     """
-    d = place_dir(place_id)
-    d.mkdir(parents=True, exist_ok=True)
+    queue_dir.mkdir(parents=True, exist_ok=True)
 
-    # 0) Pending job in queue? (skip if any recent job file for this place)
-    now = time.time()
+    # 1) Queue-level dedupe: if a recent pending job exists for this place, skip enqueue
     try:
-        for jf in queue_dir.glob(f"{place_id}.*.json"):
-            if now - jf.stat().st_mtime < dedupe_ttl_s:
-                logger.info("🛑 pending job for %s (%.1fs old), skip enqueue", place_id, now - jf.stat().st_mtime)
+        pending = list(queue_dir.glob(f"{place_id}.*.json"))
+        if pending:
+            newest = max(pending, key=lambda p: p.stat().st_mtime)
+            age = time.time() - newest.stat().st_mtime
+            if age < dedupe_ttl_s:
+                # recent pending job → skip
+                logger.info("⏳ pending job for %s (%.1fs old), skip enqueue", place_id, age)
                 return False
+            else:
+                # stale pending jobs → clean them up
+                for p in pending:
+                    try: p.unlink()
+                    except Exception: pass
     except Exception:
+        # non-fatal
         pass
 
-    # 1) Enqueue-rate lock (atomic; collapses near-simultaneous enqueues)
-    if not _acquire_enqueue_lock(d, dedupe_ttl_s):
-        logger.info("🛑 enqueue cooldown for %s; skip", place_id)
-        return False
-
-    # 2) Worker freshness lock (if a worker *already* owns the place, don't enqueue)
-    lock = d / ".refresh.lock"
-    try:
-        if lock.exists() and (now - lock.stat().st_mtime) < LOCK_STALE_S:
-            logger.info("🔒 skip enqueue %s (fresh worker lock)", place_id)
-            # touch enqueue lock so its age reflects this decision
-            (d / ".enqueue.lock").touch()
-            return False
-        if lock.exists():
-            lock.unlink(missing_ok=True)  # stale
-    except Exception:
-        pass
-
-    # 3) Mark worker lock and enqueue
-    try:
-        lock.write_text(str(os.getpid()))
-    except Exception:
-        pass
-
+    # 2) Build job payload
     mode   = "fast" if fast else "full"
     target = 40 if fast else FULL_TARGET
     budget = 15 if fast else FULL_BUDGET
 
+    # 3) Enqueue
     job_path = enqueue_scrape_job(place_id, mode=mode, target=target, budget=budget, queue_dir=queue_dir)
     logger.info("📥 ENQUEUED %s job %s → %s", mode.upper(), place_id, job_path)
-
-    # Leave .enqueue.lock in place; it will be removed (or age out) by the worker completion below.
     return True
