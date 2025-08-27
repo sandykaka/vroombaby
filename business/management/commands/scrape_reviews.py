@@ -101,16 +101,32 @@ class Command(BaseCommand):
         except Exception:
             pass
 
+# Add this helper near the top of scrape_reviews.py
 def _norm_text(s: str) -> str:
+    import re
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
 
-def _safe_touch(p: Path):   # === NEW ===
+def _read_seed_reviews(out_dir: Path):
+    """Return (seed_reviews, seen_ids, seen_text_norm) from reviews.json if present."""
+    src = out_dir / "reviews.json"
+    if not src.exists():
+        return [], set(), set()
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.touch(exist_ok=True)
-        os.utime(p, None)
+        data = json.loads(src.read_text(encoding="utf-8"))
     except Exception:
-        pass
+        return [], set(), set()
+
+    seen_ids: set[str] = set()
+    seen_text: set[str] = set()
+    for r in data:
+        rid = (r.get("id") or "").strip()
+        txt = _norm_text(r.get("text") or "")
+        if rid:
+            seen_ids.add(rid)
+        elif txt:
+            seen_text.add(txt)
+    return data, seen_ids, seen_text
+
 
 def _aggregate_now(out_dir: Path, label: str = ""):  # === NEW ===
     """
@@ -142,34 +158,22 @@ def _aggregate_now(out_dir: Path, label: str = ""):  # === NEW ===
     except Exception as e:
         print(f"⚠️ aggregate failed ({label}): {e}")
 
+# Replace your existing async scrape_reviews(...) with this version
 async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_dir: Path):
+    # refresh/keep a lock mtime so other processes don't enqueue again
     lock = out_dir / ".refresh.lock"
-    _safe_touch(lock)
+    try: lock.write_text(str(os.getpid()), encoding="utf-8")
+    except Exception: pass
 
-    # ---- Seed from previous run if present ----
-    seed_reviews: list[dict] = []
-    seed_seen_ids: set[str] = set()
-    seed_seen_text: set[str] = set()
-    seed_seen_count = 0
-    seed_path = out_dir / "reviews.json"
-    if seed_path.exists():
-        try:
-            seed_reviews = json.loads(seed_path.read_text(encoding="utf-8"))
-            for r in seed_reviews:
-                rid = (r or {}).get("id") or ""
-                txt = (r or {}).get("text") or ""
-                if rid:
-                    seed_seen_ids.add(rid)
-                elif txt:
-                    seed_seen_text.add(_norm_text(txt))
-            seed_seen_count = len(seed_seen_ids) + len(seed_seen_text)
-            print(f"↩️  Seeding with {len(seed_reviews)} prior reviews (unique keys ≈ {seed_seen_count})")
-        except Exception as e:
-            print(f"⚠️  Seed load failed: {e}")
+    # ---- seed from any existing reviews.json
+    seed_reviews, seen_ids, seen_text = _read_seed_reviews(out_dir)
+    seed_seen_count = len(seed_reviews)
 
-    # Playwright session
+    # NOTE: do NOT inflate target with seed count
+    total_reviews = int(target_reviews or 0)
+
+    from playwright.async_api import async_playwright
     async with async_playwright() as p:
-        # launch chromium with minimal memory footprint
         browser = await p.chromium.launch(
             headless=True,
             chromium_sandbox=False,
@@ -184,17 +188,14 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
                 "--single-process",
             ],
         )
-        context = await browser.new_context(
-            locale="en-US",
-            viewport={"width": 800, "height": 600},  # smaller layout surface
-            device_scale_factor=1.0
-        )
+        context = await browser.new_context(locale="en-US")
         try:
             # Block heavy/irrelevant requests
             BLOCK_TYPES = {"image", "font", "stylesheet", "media"}
             SNIPPETS = ("/maps/vt", "lh3.googleusercontent.com", "ggpht.com",
                         "fonts.gstatic.com", ".woff", ".woff2", ".ttf",
                         "/gen_204", "/collect")
+
             def _should_block(req):
                 if req.resource_type in BLOCK_TYPES:
                     return True
@@ -212,7 +213,6 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
             await page.goto(place_url, wait_until="domcontentloaded")
 
             deadline = (time.perf_counter() + time_budget) if time_budget else None
-            total_reviews = max(int(target_reviews or 0), seed_seen_count)
 
             # Find scroll container
             handle = await page.evaluate_handle(
@@ -230,7 +230,7 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
 
             locator = page.locator('div[data-review-id]')
 
-            # Prime
+            # Prime a few scrolls so the list exists
             await locator.first.wait_for(state="visible", timeout=10_000)
             for _ in range(3):
                 await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.25)")
@@ -243,7 +243,7 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
                 await more_reviews.click()
                 await page.wait_for_timeout(600)
 
-            # Sort → Highest rating
+            # Sort → Highest rating (best chance of dish mentions)
             try:
                 await page.get_by_role("button", name="Sort reviews").click()
                 menu = page.get_by_role("menu")
@@ -253,35 +253,30 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
             except Exception:
                 pass
 
-            # ---- Use seeds to skip top slice on FULL ----
-            prev_count = 0
-            if seed_seen_count and total_reviews > seed_seen_count:
-                loaded = await locator.count()
-                attempts = 0
-                while loaded < seed_seen_count and attempts < 25:
+            # Fast-forward to roughly the seed position so we don't re-parse the same cards
+            if seed_seen_count:
+                print(f"↩  Seeding with {seed_seen_count} prior reviews (unique keys ≈ {len(seen_ids)+len(seen_text)})")
+                target_cards = int(max(10, min(seed_seen_count + 5, seed_seen_count * 1.25)))
+                tries = 0
+                while tries < 40:
+                    curr = await locator.count()
+                    if curr >= target_cards:
+                        break
                     await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.9)")
-                    await page.wait_for_timeout(250)
-                    new_loaded = await locator.count()
-                    # track if we're not progressing to avoid infinite loop
-                    if new_loaded <= loaded:
-                        attempts += 1
-                    loaded = new_loaded
-                prev_count = min(loaded, seed_seen_count)
-                if prev_count:
-                    print(f"⏩ Fast-forwarded to ~{prev_count} cards (seed={seed_seen_count})")
+                    await page.wait_for_timeout(120)
+                    tries += 1
+                print(f"⏩ Fast-forwarded to ~{await locator.count()} cards (seed={seed_seen_count})")
 
-            # --- DEDUPE + ROBUST AUTHOR (seeded) ---
-            seen_ids: set[str] = set(seed_seen_ids)
-            seen_text: set[str] = set(seed_seen_text)
-            reviews: list[dict] = list(seed_reviews)
-
+            # Main harvest loop
+            reviews = list(seed_reviews)  # start with seed for continuity
             batch_size = 20
+            prev_count = 0
 
             while True:
                 curr_count = await locator.count()
                 if curr_count <= prev_count:
                     await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.6)")
-                    await page.wait_for_timeout(400)
+                    await page.wait_for_timeout(300)
                     curr_count = await locator.count()
                     if curr_count <= prev_count:
                         break
@@ -326,21 +321,25 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
 
                 added = 0
                 for entry in batch:
-                    rid  = entry.get("id") or ""
+                    rid  = (entry.get("id") or "").strip()
                     text = entry.get("text") or ""
                     key_text = _norm_text(text)
 
                     if rid:
-                        if rid in seen_ids: continue
+                        if rid in seen_ids:
+                            continue
                         seen_ids.add(rid)
                     else:
-                        if key_text in seen_text: continue
-                        seen_text.add(key_text)
+                        if key_text in seen_text:
+                            continue
+                        if key_text:
+                            seen_text.add(key_text)
 
                     entry["author"] = entry.get("author") or ""
                     reviews.append(entry)
                     added += 1
 
+                # persist incremental state
                 (out_dir / "reviews.json").write_text(json.dumps(reviews, indent=2), encoding="utf-8")
                 print(f"✅ Collected {len(reviews)}/{total_reviews} reviews…")
 
@@ -361,8 +360,10 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
             except Exception:
                 pass
 
+    # Aggregate outside the browser to keep memory low in the worker
     _aggregate_now(out_dir, label="final")
     gc.collect()
+
 
 # ---------- keys & mapping ----------
 def author_key_from_name(name: str) -> str:

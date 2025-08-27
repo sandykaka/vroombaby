@@ -20,8 +20,7 @@ from openai import OpenAI
 from django.conf     import settings
 from django.http     import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_GET
-from .utils.reviews_cache import dish_csv_path, is_stale, generate_csv_blocking, ensure_csv_async, has_enough_reviews, \
-    FULL_TARGET
+from .utils.reviews_cache import dish_csv_path, is_stale, ensure_csv_async, FULL_TARGET, REVIEWS_DIR, QUEUE_DIR
 from django.core.cache import cache
 import pandas as pd
 from pathlib import Path
@@ -434,6 +433,15 @@ client  = OpenAI(api_key=settings.OPENAI_API_KEY)
 TABS = {"indian","american","chinese","mexican","italian"}
 
 
+def _count_reviews(place_id: str) -> int:
+    """Count reviews in var/reviews/<place_id>/reviews.json (best signal for 'full')."""
+    reviews_json = Path(REVIEWS_DIR) / place_id / "reviews.json"
+    try:
+        data = json.loads(reviews_json.read_text(encoding="utf-8"))
+        return len(data) if isinstance(data, list) else 0
+    except Exception:
+        return 0
+
 @require_GET
 def restaurant_recommendations(request):
     place_id  = request.GET.get("place_id")
@@ -449,18 +457,18 @@ def restaurant_recommendations(request):
 
     csv_path = dish_csv_path(place_id)
 
-    # COLD MISS: do NOT block — start a FAST build once, return partial
     if not csv_path.exists():
         logger.info("COLD MISS %s — launching FAST", place_id)
-        ensure_csv_async(place_id, fast=True)
+        ensure_csv_async(place_id, fast=True, queue_dir=QUEUE_DIR)
         return JsonResponse({"dishes": [], "partial": True})
 
     # Decide if current snapshot is partial (not enough reviews or stale)
-    partial_flag = (not has_enough_reviews(place_id, FULL_TARGET)) or is_stale(csv_path)
+    # use reviews.json count (preferred) + CSV staleness
+    partial_flag = (_count_reviews(place_id) < FULL_TARGET) or is_stale(csv_path)
 
-    # If partial → schedule at most one FULL in background (atomic lock + cooldown prevent storms)
+    # If partial → enqueue one FULL backfill (dedupe/cooldown handled inside ensure_csv_async)
     if partial_flag:
-        ensure_csv_async(place_id, fast=False)
+        ensure_csv_async(place_id, fast=False, queue_dir=QUEUE_DIR)
 
     # Quick app cache keyed by CSV mtime
     try:
@@ -495,12 +503,19 @@ def restaurant_recommendations(request):
         ascending=[False, False, True]
     ).head(5)
 
-    dishes = [{
-        "name": str(r["dish"]),
-        "people": int(r["unique_authors"]) if pd.notna(r["unique_authors"]) else 0,
-        "mentions": int(r["mentions"]) if pd.notna(r["mentions"]) else 0,
-        "from_recommended": bool(r.get("from_recommended", False)) if pd.notna(r.get("from_recommended", False)) else False,
-    } for _, r in sub.iterrows()]
+    # be robust if 'from_recommended' doesn't exist
+    has_fr = "from_recommended" in sub.columns
+    dishes = []
+    for _, r in sub.iterrows():
+        people   = int(r["unique_authors"]) if pd.notna(r["unique_authors"]) else 0
+        mentions = int(r["mentions"])       if pd.notna(r["mentions"])       else 0
+        from_rec = bool(r["from_recommended"]) if has_fr and pd.notna(r["from_recommended"]) else False
+        dishes.append({
+            "name": str(r["dish"]),
+            "people": people,
+            "mentions": mentions,
+            "from_recommended": from_rec,
+        })
 
     payload = {"dishes": dishes, "partial": partial_flag}
     cache.set(cache_key, payload, timeout=180)
