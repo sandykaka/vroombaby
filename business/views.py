@@ -459,7 +459,7 @@ def restaurant_recommendations(request):
 
     if not csv_path.exists():
         logger.info("COLD MISS %s — launching FAST", place_id)
-        ensure_csv_async(place_id, fast=True, queue_dir=QUEUE_DIR)
+        ensure_csv_async(place_id, fast=True)
         return JsonResponse({"dishes": [], "partial": True})
 
     # Decide if current snapshot is partial (not enough reviews or stale)
@@ -468,7 +468,7 @@ def restaurant_recommendations(request):
 
     # If partial → enqueue one FULL backfill (dedupe/cooldown handled inside ensure_csv_async)
     if partial_flag:
-        ensure_csv_async(place_id, fast=False, queue_dir=QUEUE_DIR)
+        ensure_csv_async(place_id, fast=False)
 
     # Quick app cache keyed by CSV mtime
     try:
