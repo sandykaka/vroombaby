@@ -253,19 +253,36 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
             except Exception:
                 pass
 
-            # Fast-forward to roughly the seed position so we don't re-parse the same cards
+            # Fast-forward past reviews we've already saved so we don't re-parse them
             if seed_seen_count:
-                print(f"↩  Seeding with {seed_seen_count} prior reviews (unique keys ≈ {len(seen_ids)+len(seen_text)})")
-                target_cards = int(max(10, min(seed_seen_count + 5, seed_seen_count * 1.25)))
-                tries = 0
-                while tries < 40:
-                    curr = await locator.count()
-                    if curr >= target_cards:
-                        break
-                    await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.9)")
-                    await page.wait_for_timeout(120)
-                    tries += 1
-                print(f"⏩ Fast-forwarded to ~{await locator.count()} cards (seed={seed_seen_count})")
+                print(f"↩  Seeding with {seed_seen_count} prior reviews (unique keys ≈ {len(seen_ids) + len(seen_text)})")
+
+                # Current rendered cards
+                curr = await locator.count()
+
+                # Aim a bit past the seed but never exceed total target
+                # (margin of ~50 keeps us moving without overshooting)
+                ff_target = min(total_reviews, max(curr, seed_seen_count + 50))
+
+                stagnant = 0
+                max_steps = 60
+                while curr < ff_target and max_steps > 0:
+                    # scroll a full viewport; if nothing new shows up a few times, stop
+                    await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight)")
+                    await page.wait_for_timeout(180)
+
+                    nxt = await locator.count()
+                    if nxt <= curr:
+                        stagnant += 1
+                        if stagnant >= 3:
+                            break
+                    else:
+                        stagnant = 0
+                        curr = nxt
+
+                    max_steps -= 1
+
+                print(f"⏩ Fast-forwarded to ~{curr} cards (seed={seed_seen_count})")
 
             # Main harvest loop
             reviews = list(seed_reviews)  # start with seed for continuity
