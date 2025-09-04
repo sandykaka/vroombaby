@@ -1,5 +1,5 @@
 import gc
-import os
+import os, csv
 from urllib.parse import urlparse, parse_qs
 
 from django.core.management.base import BaseCommand
@@ -17,6 +17,11 @@ import json
 from pathlib import Path
 from datetime import timedelta
 from django.conf import settings
+from difflib import SequenceMatcher
+from unidecode import unidecode
+import inflect
+import spacy
+from functools import lru_cache
 
 CACHE_BASE = Path(settings.REVIEWS_CACHE_DIR)
 
@@ -61,7 +66,7 @@ class Command(BaseCommand):
         if options.get("fast"):
             target, time_budget = max(target, 24), max(time_budget, 10)
         else:
-            target, time_budget = max(target, 200), max(time_budget, 90)
+            target, time_budget = max(target, 150), max(time_budget, 90)
 
         default_base = Path(getattr(settings, "REVIEWS_CACHE_DIR",
                                     Path(settings.BASE_DIR) / "var" / "reviews"))
@@ -90,9 +95,12 @@ class Command(BaseCommand):
             place_url = f"{place_url}{sep}hl=en"
 
         # 3) Scrape (async)
-        asyncio.run(scrape_reviews(place_url=place_url, place_id=place_id,
-                                   target_reviews=target, time_budget=time_budget,
-                                   out_dir=out_dir))
+        asyncio.run( scrape_reviews(
+            place_url=place_url, place_id=place_id, target_reviews=target, time_budget=time_budget, out_dir=out_dir,
+            build_mentions_now=True,
+            harvest_images_now=True,
+            top_k_images=5,
+        ))
 
         # Clear lock if our run created it
         lock = out_dir / ".refresh.lock"
@@ -101,10 +109,78 @@ class Command(BaseCommand):
         except Exception:
             pass
 
+# --- dish normalization (library-based) ---
+# pip install spacy unidecode inflect rapidfuzz
+# python -m spacy download en_core_web_sm
+
+
+# load lightweight spaCy pipeline (tokenizer + tagger only)
+_nlp = spacy.load("en_core_web_sm", disable=["ner","parser","lemmatizer","textcat"])
+_inflect = inflect.engine()
+_SMALL = {"and","of","with","on","in","to","for","by","at"}
+
+def _singular(tok: str) -> str:
+    s = _inflect.singular_noun(tok)
+    return s if isinstance(s, str) and s else tok
+
+@lru_cache(maxsize=4096)
+def normalize_dish_key_and_label(text: str) -> Tuple[str, str]:
+    """
+    Returns (key, display_label).
+    key: lowercase, no leading DET, unified connectors, punctuation stripped, singularized.
+    label: Title Case (keeps small words lowercase) for UI.
+    """
+    if not text:
+        return "", ""
+    t = unidecode(str(text)).strip()
+    if not t:
+        return "", ""
+
+    doc = _get_nlp()(t)
+
+    norm_tokens = []
+    for i, tok in enumerate(doc):
+        if i == 0 and tok.pos_ == "DET":  # drop leading 'the/a/an' via POS
+            continue
+        if tok.is_space or tok.is_punct:
+            continue
+
+        s = tok.text.lower()
+        if s in {"&", "n", "n."}:
+            s = "and"
+
+        s = re.sub(r"[’'`]", "", s)          # apostrophes
+        s = re.sub(r"[-_/]", " ", s)         # separators -> space
+        s = re.sub(r"[^a-z0-9\s]", " ", s)   # other punct -> space
+        s = re.sub(r"\s+", " ", s).strip()
+        if not s:
+            continue
+
+        parts = [_singular(p) for p in s.split()]
+        norm_tokens.extend(parts)
+
+    key = " ".join(norm_tokens).strip()
+    if not key:
+        return "", ""
+
+    words = key.split()
+    label = " ".join(w if (i and w in _SMALL) else w.capitalize()
+                     for i, w in enumerate(words))
+    return key, label
+
 # Add this helper near the top of scrape_reviews.py
 def _norm_text(s: str) -> str:
     import re
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
+
+_nlp = None
+
+def _get_nlp():
+    global _nlp
+    if _nlp is None:
+        import spacy
+        _nlp = spacy.load("en_core_web_sm", disable=["ner","parser","lemmatizer","textcat"])
+    return _nlp
 
 def _read_seed_reviews(out_dir: Path):
     """Return (seed_reviews, seen_ids, seen_text_norm) from reviews.json if present."""
@@ -153,26 +229,39 @@ def _aggregate_now(out_dir: Path, label: str = ""):  # === NEW ===
             out_csv=str(out_dir / "dish_mentions.csv"),
             save_raw_csv=str(out_dir / "dish_mentions_raw.csv"),
             mode="both",
+            limit_per_ethnicity=5,                # writes dish_mentions_top5.csv
+            out_csv_topk=str(out_dir / "dish_mentions_top5.csv"),
         )
         print(f"🟢 aggregated ({label}) → {out_dir/'dish_mentions.csv'}")
     except Exception as e:
         print(f"⚠️ aggregate failed ({label}): {e}")
 
-# Replace your existing async scrape_reviews(...) with this version
-async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_dir: Path):
-    # refresh/keep a lock mtime so other processes don't enqueue again
+async def scrape_reviews(
+        place_url: str,
+        place_id: str,
+        target_reviews: int,
+        time_budget: Optional[float],
+        out_dir: Path,
+        *,
+        build_mentions_now: bool = True,
+        harvest_images_now: bool = True,
+        top_k_images: int = 5,
+):
+    # ---- locks ----
     lock = out_dir / ".refresh.lock"
     try: lock.write_text(str(os.getpid()), encoding="utf-8")
     except Exception: pass
 
-    # ---- seed from any existing reviews.json
     seed_reviews, seen_ids, seen_text = _read_seed_reviews(out_dir)
     seed_seen_count = len(seed_reviews)
-
-    # NOTE: do NOT inflate target with seed count
     total_reviews = int(target_reviews or 0)
 
-    from playwright.async_api import async_playwright
+    # pre-warm tagger so aggregation later is instant
+    try:
+        _get_nlp()("warm up")
+    except Exception:
+        pass
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -185,36 +274,37 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--disable-crash-reporter",
-                "--single-process",
+                # no "--single-process"
             ],
         )
+
         context = await browser.new_context(locale="en-US")
+        page = await context.new_page()
+        page.set_default_timeout(15_000)
+
+        # request blocking (reviews phase only)
+        BLOCK_TYPES = {"image", "font", "stylesheet", "media"}
+        SNIPPETS = ("/maps/vt", "lh3.googleusercontent.com", "ggpht.com",
+                    "fonts.gstatic.com", ".woff", ".woff2", ".ttf",
+                    "/gen_204", "/collect")
+        async def _route_filter(route):
+            req = route.request
+            if (req.resource_type in BLOCK_TYPES) or any(s in req.url for s in SNIPPETS):
+                await route.abort()
+            else:
+                await route.continue_()
+        await context.route("**/*", _route_filter)
+
+        deadline = (time.perf_counter() + time_budget) if time_budget else None
+
         try:
-            # Block heavy/irrelevant requests
-            BLOCK_TYPES = {"image", "font", "stylesheet", "media"}
-            SNIPPETS = ("/maps/vt", "lh3.googleusercontent.com", "ggpht.com",
-                        "fonts.gstatic.com", ".woff", ".woff2", ".ttf",
-                        "/gen_204", "/collect")
-
-            def _should_block(req):
-                if req.resource_type in BLOCK_TYPES:
-                    return True
-                u = req.url
-                return any(s in u for s in SNIPPETS)
-
-            await context.route("**/*", lambda r: r.abort() if _should_block(r.request) else r.continue_())
-            page = await context.new_page()
-
+            # ---------- scrape reviews ----------
             await page.add_style_tag(content="""
               *,*::before,*::after{animation:none!important;transition:none!important}
               html{scroll-behavior:auto!important}
             """)
-
             await page.goto(place_url, wait_until="domcontentloaded")
 
-            deadline = (time.perf_counter() + time_budget) if time_budget else None
-
-            # Find scroll container
             handle = await page.evaluate_handle(
                 """() => {
                     const card = document.querySelector("div[data-review-id]");
@@ -225,25 +315,19 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
                 }"""
             )
             scroll_el = handle.as_element()
-            tag = await scroll_el.evaluate("(el) => el.tagName")
-            print(f"✅ Using scroll container: {tag}")
-
             locator = page.locator('div[data-review-id]')
 
-            # Prime a few scrolls so the list exists
             await locator.first.wait_for(state="visible", timeout=10_000)
             for _ in range(3):
                 await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.25)")
                 await page.wait_for_timeout(300)
 
-            # 'More reviews'
             more_reviews = page.locator('text=/More reviews/').first
             if await more_reviews.count():
                 await more_reviews.scroll_into_view_if_needed()
                 await more_reviews.click()
                 await page.wait_for_timeout(600)
 
-            # Sort → Highest rating (best chance of dish mentions)
             try:
                 await page.get_by_role("button", name="Sort reviews").click()
                 menu = page.get_by_role("menu")
@@ -253,42 +337,25 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
             except Exception:
                 pass
 
-            # Fast-forward past reviews we've already saved so we don't re-parse them
             if seed_seen_count:
-                print(f"↩  Seeding with {seed_seen_count} prior reviews (unique keys ≈ {len(seen_ids) + len(seen_text)})")
-
-                # Current rendered cards
                 curr = await locator.count()
-
-                # Aim a bit past the seed but never exceed total target
-                # (margin of ~50 keeps us moving without overshooting)
                 ff_target = min(total_reviews, max(curr, seed_seen_count + 50))
-
-                stagnant = 0
-                max_steps = 60
+                stagnant = 0; max_steps = 60
                 while curr < ff_target and max_steps > 0:
-                    # scroll a full viewport; if nothing new shows up a few times, stop
                     await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight)")
                     await page.wait_for_timeout(180)
-
                     nxt = await locator.count()
                     if nxt <= curr:
                         stagnant += 1
                         if stagnant >= 3:
                             break
                     else:
-                        stagnant = 0
-                        curr = nxt
-
+                        stagnant = 0; curr = nxt
                     max_steps -= 1
 
-                print(f"⏩ Fast-forwarded to ~{curr} cards (seed={seed_seen_count})")
-
-            # Main harvest loop
-            reviews = list(seed_reviews)  # start with seed for continuity
+            reviews = list(seed_reviews)
             batch_size = 20
             prev_count = 0
-
             while True:
                 curr_count = await locator.count()
                 if curr_count <= prev_count:
@@ -300,7 +367,6 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
 
                 end = min(prev_count + batch_size, curr_count)
 
-                # expand “See more” within slice
                 await page.evaluate(
                     """([start,end]) => {
                         const cards = Array.from(document.querySelectorAll('div[data-review-id]')).slice(start,end);
@@ -312,7 +378,6 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
                     [prev_count, end]
                 )
 
-                # bulk extract
                 batch = await page.evaluate(
                     """([start,end]) => {
                         const out = [];
@@ -336,59 +401,80 @@ async def scrape_reviews(place_url, place_id, target_reviews, time_budget, out_d
                     [prev_count, end]
                 )
 
-                added = 0
                 for entry in batch:
                     rid  = (entry.get("id") or "").strip()
                     text = entry.get("text") or ""
                     key_text = _norm_text(text)
-
                     if rid:
-                        if rid in seen_ids:
-                            continue
+                        if rid in seen_ids: continue
                         seen_ids.add(rid)
                     else:
-                        if key_text in seen_text:
-                            continue
-                        if key_text:
-                            seen_text.add(key_text)
-
+                        if key_text in seen_text: continue
+                        if key_text: seen_text.add(key_text)
                     entry["author"] = entry.get("author") or ""
                     reviews.append(entry)
-                    added += 1
 
-                # persist incremental state
                 (out_dir / "reviews.json").write_text(json.dumps(reviews, indent=2), encoding="utf-8")
-                print(f"✅ Collected {len(reviews)}/{total_reviews} reviews…")
 
                 prev_count = end
-                if len(reviews) >= total_reviews:
-                    break
-                if deadline and time.perf_counter() >= deadline:
-                    print("⏱️ time budget reached; returning partial results")
-                    break
+                if len(reviews) >= total_reviews: break
+                if deadline and time.perf_counter() >= deadline: break
 
         finally:
+            # turn OFF request blocking; we'll reuse context for images
             try:
-                await context.close()
+                await context.unroute("**/*", _route_filter)
             except Exception:
-                pass
+                try: await context.unroute("**/*")
+                except Exception: pass
             try:
-                await browser.close()
+                await page.close()
             except Exception:
                 pass
 
-    # Aggregate outside the browser to keep memory low in the worker
-    _aggregate_now(out_dir, label="final")
-    # clear locks so future enqueues are allowed
-    try:
-        (out_dir / ".refresh.lock").unlink(missing_ok=True)
-    except Exception:
-        pass
-    try:
-        (out_dir / ".enqueue.lock").unlink(missing_ok=True)
-    except Exception:
-        pass
+        # ---------- FAST aggregate (optional, while browser still open) ----------
+        if build_mentions_now:
+            try:
+                _aggregate_now(out_dir, label="fast")
+            except Exception as e:
+                print(f"⚠️ aggregate failed (fast): {e}")
 
+        # ---------- harvest images using SAME context ----------
+        if harvest_images_now:
+            try:
+                top_dishes = _top_dishes_for_images(out_dir, top_k=2, dedupe=True)
+            except Exception:
+                top_dishes = []
+
+            if top_dishes:
+                # skip already-downloaded filenames
+                have = _existing_image_stems(out_dir)
+                top_dishes = [d for d in top_dishes if d.lower() not in have]
+
+            if top_dishes:
+                page2 = await context.new_page()
+                try:
+                    await page2.goto(place_url, wait_until="domcontentloaded")
+                    await _harvest_menu_images_on_page(page2, top_dishes, out_dir, max_scrolls=60)
+                    print(f"🖼️ harvested images for {len(top_dishes)} dishes (FAST top{top_k_images}).")
+                except Exception as e:
+                    print(f"⚠️ menu image harvest failed: {e}")
+                finally:
+                    try: await page2.close()
+                    except Exception: pass
+
+        # ---------- close once ----------
+        try: await context.close()
+        except Exception: pass
+        try: await browser.close()
+        except Exception: pass
+
+    # Aggregate outside the browser for a final, consistent output
+    if not build_mentions_now:
+        _aggregate_now(out_dir, label="post-scrape")
+    for name in (".refresh.lock", ".enqueue.lock"):
+        try: (out_dir / name).unlink(missing_ok=True)
+        except Exception: pass
     gc.collect()
 
 
@@ -398,17 +484,42 @@ def author_key_from_name(name: str) -> str:
     norm = re.sub(r"\s+", " ", norm)
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
-def normalize_dish(d):
-    if not d:
-        return None
-    d = re.sub(r"\s+", " ", str(d)).strip(" .,-–—")
-    d = d.replace("’", "'")
-    d = re.sub(r"\'S\b", "'s", d)     # fix "Mary'S" -> "Mary's"
-    if BAD_KW.search(d):
-        return None
-    if len(d.split()) > 6:            # drop very long phrases
-        return None
-    return d
+_ARTICLES = {"the", "a", "an"}
+
+def normalize_dish(s: str) -> str:
+    """
+    Normalizes a dish string for stable matching:
+    - trim, lowercase
+    - unify & -> and
+    - strip apostrophes/punctuation noise
+    - collapse whitespace
+    - (display form) Title-Case except small words like 'and'
+    """
+    if not s:
+        return ""
+    t = s.strip().lower()
+
+    # unify connectors and punctuation
+    t = t.replace("&", " and ")
+    t = re.sub(r"[’'`]", "", t)           # drop apostrophes
+    t = re.sub(r"[-_/]", " ", t)          # normalize separators to space
+    t = re.sub(r"[^a-z0-9\s]", " ", t)    # strip other punctuation
+    t = re.sub(r"\s+", " ", t).strip()
+
+    # we keep leading articles here so the raw text is preserved;
+    # de-duplication happens on dish_key() during aggregation.
+    if not t:
+        return ""
+
+    # Pretty label (Title Case, keep 'and' lowercase)
+    words = t.split()
+    out = []
+    for w in words:
+        if w in {"and", "of", "with"}:
+            out.append(w)
+        else:
+            out.append(w.capitalize())
+    return " ".join(out)
 
 
 def map_group_to_ui(group_chain: Optional[str]) -> str:
@@ -481,6 +592,8 @@ def build_dish_mentions(
         save_raw_csv: Optional[str] = None,
         lexicon_csv: Optional[str] = "dish_lexicon.csv",
         mode: str = "both",   # "recommended" | "lexicon" | "both"
+        limit_per_ethnicity: Optional[int] = None,      # <-- NEW
+        out_csv_topk: Optional[str] = "dish_mentions_top5.csv",  # <-- NEW
 ) -> pd.DataFrame:
     t0 = time.time()
 
@@ -547,31 +660,36 @@ def build_dish_mentions(
     rows = []
     for _, row in reviews_df.iterrows():
         rtext = row["text"]
+
         dishes_rec = extract_recommended_dishes(rtext) if mode in ("recommended","both") else []
         dishes_lex = extract_with_lexicon(rtext, idx) if use_lex else []
 
-        # union with normalization + filtering
-        seen = set(); dish_list = []
-        for d in dishes_rec + dishes_lex:
-            nd = normalize_dish(d)
-            if not nd:
-                continue
-            k = nd.lower()
-            if k not in seen:
-                seen.add(k); dish_list.append(nd)
+        # build a set of normalized KEYS that came from the "recommended" extractor
+        rec_key_set = set()
+        for d in dishes_rec:
+            k, _ = normalize_dish_key_and_label(d)
+            if k:
+                rec_key_set.add(k)
 
-        for dish in dish_list:
+        # union by canonical key, keep a pretty label
+        seen_keys = set()
+        for d in (dishes_rec + dishes_lex):
+            k, label = normalize_dish_key_and_label(d)
+            if not k or k in seen_keys:
+                continue
+            seen_keys.add(k)
+
             rows.append({
                 "author_key": row["author_key"],
                 "author": row["author"],
                 "group": row["group"],
                 "tab": row["tab"],
                 "ethnicity_ui": row["ethnicity_ui"],
-                "dish": dish,
+                "dish_key": k,          # <-- canonical for grouping
+                "dish": label,          # <-- pretty label for UI
                 "text": rtext,
-                "source": ("recommended" if dish in dishes_rec else "lexicon"),
+                "source": ("recommended" if k in rec_key_set else "lexicon"),
             })
-
     raw = pd.DataFrame(rows)
 
     # optional raw dump
@@ -591,21 +709,44 @@ def build_dish_mentions(
         print(f"ℹ️ No dish mentions after tab filter.")
         return raw
 
+    # pick a representative display per (tab, dish_key)
+    rep = (
+        raw.groupby(["tab","dish_key"])["dish"]
+        .agg(lambda s: s.value_counts().index[0])
+        .reset_index()
+        .rename(columns={"dish": "dish_display"})
+    )
+
     agg = (
-        raw.groupby(["tab","dish"], dropna=False)
+        raw.groupby(["tab","dish_key"], dropna=False)
         .agg(
             mentions=("dish","count"),
             unique_authors=("author_key", pd.Series.nunique),
             from_recommended=("source", lambda s: int((s == "recommended").any())),
         )
         .reset_index()
-        .sort_values(["tab","mentions","unique_authors","dish"],
-                     ascending=[True, False, False, True])
+        .merge(rep, on=["tab","dish_key"], how="left")
+        .rename(columns={"tab": "ethnicity_ui"})
     )
-    agg = agg.rename(columns={"tab": "ethnicity_ui"})
+
+    # finalize columns for CSVs: use display label as 'dish'
+    agg = (agg
+           .rename(columns={"dish_display": "dish"})
+           .drop(columns=["dish_key"])
+           .sort_values(["ethnicity_ui","mentions","unique_authors","dish"],
+                        ascending=[True, False, False, True]))
+
     agg.to_csv(out_csv, index=False)
 
-    print(f"✅ dish_mentions → {out_csv}  ({len(agg)} rows; mode={mode}; {time.time()-t0:.2f}s)")
+    # optional top-k file remains consistent
+    if "limit_per_ethnicity" in locals() and limit_per_ethnicity is not None and out_csv_topk:
+        tmp = agg.copy()
+        tmp["__rank"] = tmp.groupby("ethnicity_ui").cumcount()
+        topk_df = tmp[tmp["__rank"] < int(limit_per_ethnicity)].drop(columns="__rank")
+        topk_df.to_csv(out_csv_topk, index=False)
+        print(f"✅ dish_mentions (TOP{limit_per_ethnicity}) → {out_csv_topk}  ({len(topk_df)} rows)")
+
+    print(f"✅ dish_mentions (FULL) → {out_csv}  ({len(agg)} rows; mode={mode}; {time.time()-t0:.2f}s)")
     return agg
 
 
@@ -749,11 +890,17 @@ def write_or_update_authors_csv(reviews_json_path: str, authors_csv_path: str) -
         existing = pd.read_csv(p, dtype=str).fillna("")
         combined = pd.concat([existing, new], ignore_index=True, sort=False)
         combined = combined.drop_duplicates(subset=["author_key"], keep="first")
-        for col in ["author_key","author_norm","first","last","group","prob","lens","review_count_by_author","author_display"]:
-            if col not in combined.columns:
-                combined[col] = ""
-        # ✅ enrich even on update
-        combined = enrich_groups_with_ethnicolr(combined, prob_threshold=0.7)
+
+        # only blank rows need enrichment
+        mask = combined["group"].astype(str).str.strip().eq("") | combined["prob"].astype(str).str.strip().eq("")
+
+        if mask.any():
+            to_enrich = combined.loc[mask].copy()
+            to_enrich = enrich_groups_with_ethnicolr(to_enrich, prob_threshold=0.7)
+            # write back enriched cols only
+            for col in ["group", "prob", "lens"]:
+                combined.loc[mask, col] = to_enrich[col].values
+
         combined.to_csv(p, index=False)
         print(f"✅ Updated authors.csv → {p}  ({len(combined)} authors)")
     else:
@@ -881,3 +1028,146 @@ def to_chain(label: str) -> str:
         if lbl == "asian":
             return "Asian,GreaterEastAsian,EastAsian"
         return ""  # unknown/low confidence → leave blank
+
+def _norm(s: str) -> str:
+    s = (s or "").lower().replace("&", " and ")
+    s = re.sub(r"[^\w\s]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+def _label_score(dish: str, label: str) -> float:
+    """Blend token overlap + fuzzy ratio; no hard-coded synonyms."""
+    if not dish or not label:
+        return 0.0
+    d, l = _norm(dish), _norm(label)
+
+    if d == l:          # exact
+        return 1.0
+    if d in l or l in d:  # containment
+        return 0.92
+
+    dt, lt = set(d.split()), set(l.split())
+    jacc = (len(dt & lt) / len(dt | lt)) if dt and lt else 0.0
+    fuzz = SequenceMatcher(None, d, l).ratio()
+    return min(1.0, 0.65 * jacc + 0.45 * fuzz)
+
+def _top_dishes_for_images(out_dir: Path, top_k: int = 5, dedupe: bool = True) -> list[str]:
+    csv_path = out_dir / "dish_mentions.csv"
+    if not csv_path.exists():
+        return []
+    df = pd.read_csv(csv_path, dtype=str).rename(columns=lambda c: c.strip())
+    low = {c.lower(): c for c in df.columns}
+    req = ["ethnicity_ui","dish","mentions","unique_authors"]
+    if not all(k in low for k in req):
+        return []
+    ecol, dcol = low["ethnicity_ui"], low["dish"]
+    mcol, ucol = low["mentions"], low["unique_authors"]
+    df[mcol] = pd.to_numeric(df[mcol], errors="coerce").fillna(0).astype(int)
+    df[ucol] = pd.to_numeric(df[ucol], errors="coerce").fillna(0).astype(int)
+    df = df.sort_values([ecol, mcol, ucol, dcol], ascending=[True, False, False, True])
+    df["__rank"] = df.groupby(ecol).cumcount()
+    df_top = df[df["__rank"] < int(top_k)]
+    dishes = df_top[dcol].astype(str).str.strip().tolist()
+    if not dedupe:
+        return [d for d in dishes if d]
+    seen=set(); out=[]
+    for d in dishes:
+        k=d.lower()
+        if d and k not in seen:
+            seen.add(k); out.append(d)
+    return out
+
+def _existing_image_stems(out_dir: Path) -> set[str]:
+    imgs_dir = out_dir / "menu_images"
+    stems = set()
+    if imgs_dir.exists():
+        for ext in ("*.jpg","*.jpeg","*.png","*.webp"):
+            for p in imgs_dir.glob(ext):
+                stems.add(p.stem.casefold())
+    return stems
+
+async def _harvest_menu_images_on_page(
+        page,                     # <-- Playwright Page that is already on place_url
+        top_dishes: list[str],
+        out_dir: Path,
+        max_scrolls: int = 60,
+):
+    """
+    Re-uses an existing Playwright page (images allowed) to:
+      - switch to the Menu tab,
+      - scroll through the highlights carousel/grid,
+      - try to match aria-labels to each dish name,
+      - save the first matching image per dish to dish_images.json.
+    """
+    # 1) Go to "Menu" tab with resilient queries
+    # (keep your robust role/text matching logic)
+    menu_tab = page.locator('role=tab[name=/menu/i]').first
+    if await menu_tab.count():
+        await menu_tab.click()
+        await page.wait_for_timeout(350)
+    else:
+        # fallback: text match
+        mt = page.locator("text=/^Menu$/i").first
+        if await mt.count():
+            await mt.click()
+            await page.wait_for_timeout(350)
+
+    # 2) Now walk through highlight buttons/images and match aria-labels
+    #    Keep your current robust matching (_label_score, SequenceMatcher, etc.)
+    found: dict[str, dict] = {}
+    seen = set()
+
+    # A resilient query for items that have an image and an aria-label
+    items = page.locator('button[aria-label] img, img[alt][crossorigin]').locator("..")  # go back to button if needed
+
+    scrolls = 0
+    while scrolls < max_scrolls and len(found) < len(top_dishes):
+        count = await items.count()
+        for i in range(count):
+            btn = items.nth(i)
+            # normalize label
+            label = (await btn.get_attribute("aria-label")) or ""
+            if not label:
+                # try the img alt
+                img = btn.locator("img").first
+                if await img.count():
+                    label = (await img.get_attribute("alt")) or ""
+
+            if not label:
+                continue
+
+            # best-effort label matching (your existing _label_score)
+            for dish in top_dishes:
+                if dish in found:  # already found one image for this dish
+                    continue
+                score = _label_score(label, dish)
+                if score >= 0.66:  # tune threshold as you like
+                    img = btn.locator("img").first
+                    if await img.count():
+                        src = await img.get_attribute("src")
+                        if src and src not in seen:
+                            seen.add(src)
+                            found[dish] = {"image_url": src, "caption": label}
+        if len(found) >= len(top_dishes):
+            break
+
+        # try to reveal more items (scroll the container and page)
+        await page.mouse.wheel(0, 1200)
+        await page.wait_for_timeout(250)
+        scrolls += 1
+
+    # 3) Persist to dish_images.json (merge with any existing)
+    path = out_dir / "dish_images.json"
+    try:
+        existing = json.loads(path.read_text("utf-8"))
+    except Exception:
+        existing = {}
+
+    changed = False
+    for dish, val in found.items():
+        if dish not in existing:
+            existing[dish] = val
+            changed = True
+
+    if changed:
+        path.write_text(json.dumps(existing, indent=2), encoding="utf-8")

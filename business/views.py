@@ -505,17 +505,32 @@ def restaurant_recommendations(request):
 
     # be robust if 'from_recommended' doesn't exist
     has_fr = "from_recommended" in sub.columns
+    # Try to attach an image per dish (if the scraper produced a mapping)
+    img_map_path = csv_path.parent / "dish_images.json"
+    img_map = {}
+    if img_map_path.exists():
+        try:
+            img_map = json.loads(img_map_path.read_text(encoding="utf-8"))
+        except Exception:
+            img_map = {}
+
     dishes = []
     for _, r in sub.iterrows():
-        people   = int(r["unique_authors"]) if pd.notna(r["unique_authors"]) else 0
-        mentions = int(r["mentions"])       if pd.notna(r["mentions"])       else 0
-        from_rec = bool(r["from_recommended"]) if has_fr and pd.notna(r["from_recommended"]) else False
+        name = str(r["dish"])
+        people = int(r["unique_authors"]) if pd.notna(r["unique_authors"]) else 0
+        mentions = int(r["mentions"]) if pd.notna(r["mentions"]) else 0
+        from_rec = bool(r.get("from_recommended", False)) if pd.notna(r.get("from_recommended", False)) else False
+
+        img_info = img_map.get(name) or {}
         dishes.append({
-            "name": str(r["dish"]),
+            "name": name,
             "people": people,
             "mentions": mentions,
             "from_recommended": from_rec,
+            "image_url": img_info.get("image_url"),
+            "caption": img_info.get("caption"),
         })
+
 
     payload = {"dishes": dishes, "partial": partial_flag}
     cache.set(cache_key, payload, timeout=180)

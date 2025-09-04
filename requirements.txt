@@ -11,3 +11,8 @@ ethnicolr
 tensorflow==2.12.0 # ubuntu
 dotenv
 whitenoise
+spacy
+unidecode
+inflect
+rapidfuzz
+en_core_web_sm
