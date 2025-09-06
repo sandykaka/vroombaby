@@ -4,7 +4,7 @@ import urllib
 from datetime import datetime
 from functools import wraps
 import base64
-import json
+import json, os, time
 import requests
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render, redirect
@@ -430,7 +430,7 @@ def get_user_linkedin_details(request):
 # initialize clients
 gmaps = googlemaps.Client(key=settings.GOOGLE_API_KEY)
 client  = OpenAI(api_key=settings.OPENAI_API_KEY)
-TABS = {"indian","american","chinese","mexican","italian"}
+TABS = {"popular", "indian","american","chinese","mexican","italian"}
 
 
 def _count_reviews(place_id: str) -> int:
@@ -455,38 +455,176 @@ def restaurant_recommendations(request):
 
     bypass = (request.GET.get("nocache") == "1")
 
-    csv_path = dish_csv_path(place_id)
+    csv_path: Path = dish_csv_path(place_id)
+    place_root: Path = csv_path.parent
 
+    # --- Cold-miss guard to avoid infinite spinner & ensure a response every time
+    COLD_MAX_WAIT_S = 60
+    cold_sentinel = place_root / ".first_cold_miss.ts"
+
+    def _age_seconds(p: Path):
+        try:
+            return time.time() - p.stat().st_mtime
+        except Exception:
+            return None
+
+    # If there is no CSV yet ⇒ cold miss
     if not csv_path.exists():
-        logger.info("COLD MISS %s — launching FAST", place_id)
-        ensure_csv_async(place_id, fast=True)
-        return JsonResponse({"dishes": [], "partial": True})
+        place_root.mkdir(parents=True, exist_ok=True)
+
+        if not cold_sentinel.exists():
+            # First cold miss for this place: touch sentinel, enqueue once, and return partial
+            try:
+                cold_sentinel.touch(exist_ok=True)
+            except Exception:
+                pass
+            try:
+                enq = ensure_csv_async(place_id, fast=True)
+                logger.info("COLD MISS %s — launched FAST (enqueued=%s)", place_id, enq)
+            except Exception as e:
+                logger.exception("COLD MISS %s — enqueue failed: %s", place_id, e)
+            return JsonResponse({"dishes": [], "partial": True})
+
+        # Subsequent cold misses: decide whether to keep polling or stop
+        age = _age_seconds(cold_sentinel)
+        if age is not None and age <= COLD_MAX_WAIT_S:
+            logger.info("COLD MISS %s (%.0fs) — keep polling", place_id, age)
+            try:
+                ensure_csv_async(place_id, fast=True)  # safe: de-duped inside
+            except Exception:
+                pass
+            return JsonResponse({"dishes": [], "partial": True})
+        else:
+            logger.info("COLD MISS %s exceeded wait window — stop polling", place_id)
+            return JsonResponse({"dishes": [], "partial": False})
+
+    # CSV exists now → clear the cold sentinel
+    try:
+        if cold_sentinel.exists():
+            cold_sentinel.unlink()
+    except Exception:
+        pass
 
     # Decide if current snapshot is partial (not enough reviews or stale)
-    # use reviews.json count (preferred) + CSV staleness
     partial_flag = (_count_reviews(place_id) < FULL_TARGET) or is_stale(csv_path)
 
-    # If partial → enqueue one FULL backfill (dedupe/cooldown handled inside ensure_csv_async)
+    # If partial → enqueue one FULL backfill (de-duped inside ensure_csv_async)
     if partial_flag:
-        ensure_csv_async(place_id, fast=False)
+        try:
+            ensure_csv_async(place_id, fast=False)
+        except Exception:
+            pass
 
     # Quick app cache keyed by CSV mtime
     try:
         mtime = int(csv_path.stat().st_mtime)
     except Exception:
         mtime = 0
+
     cache_key = f"rr:{place_id}:{eth}:{mtime}"
     if not bypass:
         cached = cache.get(cache_key)
         if cached is not None:
             return JsonResponse(cached)
 
-    # Read current CSV snapshot
+    # ---------- Read current CSV snapshot ----------
     try:
         df = pd.read_csv(csv_path, dtype={"ethnicity_ui": "string", "dish": "string"})
     except Exception:
         return JsonResponse({"dishes": [], "partial": True})
 
+    # ---------- Image map (shared) ----------
+    img_map_path = csv_path.parent / "dish_images.json"
+    img_map = {}
+    if img_map_path.exists():
+        try:
+            img_map = json.loads(img_map_path.read_text(encoding="utf-8"))
+        except Exception:
+            img_map = {}
+
+    # Helper to turn rows into API payload
+    def _rows_to_payload(rows: pd.DataFrame):
+        out = []
+        for _, r in rows.iterrows():
+            name = str(r["dish"])
+            people = int(r.get("unique_authors") or 0)
+            mentions = int(r.get("mentions") or 0)
+            from_rec = bool(r.get("from_recommended", False))
+            img_info = img_map.get(name) or {}
+            out.append({
+                "name": name,
+                "people": people,
+                "mentions": mentions,
+                "from_recommended": from_rec,
+                "image_url": img_info.get("image_url"),
+                "caption": img_info.get("caption"),
+            })
+        return {"dishes": out, "partial": partial_flag}
+
+    # =========================
+    # Popular tab (this is the new bit)
+    # =========================
+    if eth == "popular":
+        # Prefer FULL dataset when we're no longer partial (more accurate).
+        if not partial_flag:
+            try:
+                cols = df.columns
+                agg = {"mentions": "sum", "unique_authors": "sum"}
+                if "from_recommended" in cols:
+                    agg["from_recommended"] = "max"
+                pop = (df.groupby("dish", as_index=False)
+                       .agg(agg)
+                       .sort_values(["mentions", "unique_authors", "dish"],
+                                    ascending=[False, False, True])
+                       .head(5))
+                payload = _rows_to_payload(pop)
+                cache.set(cache_key, payload, timeout=180)
+                return JsonResponse(payload)
+            except Exception:
+                # fall through to top5 fast path
+                pass
+
+        # While partial → use dish_mentions_top5.csv for fastest response.
+        top5_path = csv_path.parent / "dish_mentions_top5.csv"
+        if top5_path.exists():
+            try:
+                top5 = pd.read_csv(top5_path, dtype={"dish": "string"})
+                if not top5.empty:
+                    cols = top5.columns
+                    agg = {"mentions": "sum", "unique_authors": "sum"}
+                    if "from_recommended" in cols:
+                        agg["from_recommended"] = "max"
+                    pop = (top5.groupby("dish", as_index=False)
+                           .agg(agg)
+                           .sort_values(["mentions", "unique_authors", "dish"],
+                                        ascending=[False, False, True])
+                           .head(5))
+                    payload = _rows_to_payload(pop)
+                    cache.set(cache_key, payload, timeout=120)
+                    return JsonResponse(payload)
+            except Exception:
+                pass
+
+        # Fallback: compute Popular quickly from whatever we have in df
+        try:
+            cols = df.columns
+            agg = {"mentions": "sum", "unique_authors": "sum"}
+            if "from_recommended" in cols:
+                agg["from_recommended"] = "max"
+            pop = (df.groupby("dish", as_index=False)
+                   .agg(agg)
+                   .sort_values(["mentions", "unique_authors", "dish"],
+                                ascending=[False, False, True])
+                   .head(5))
+            payload = _rows_to_payload(pop)
+            cache.set(cache_key, payload, timeout=120)
+            return JsonResponse(payload)
+        except Exception:
+            return JsonResponse({"dishes": [], "partial": partial_flag})
+
+    # =========================
+    # Per-ethnicity (existing behavior)
+    # =========================
     if df.empty:
         payload = {"dishes": [], "partial": True}
         cache.set(cache_key, payload, timeout=120)
@@ -503,35 +641,6 @@ def restaurant_recommendations(request):
         ascending=[False, False, True]
     ).head(5)
 
-    # be robust if 'from_recommended' doesn't exist
-    has_fr = "from_recommended" in sub.columns
-    # Try to attach an image per dish (if the scraper produced a mapping)
-    img_map_path = csv_path.parent / "dish_images.json"
-    img_map = {}
-    if img_map_path.exists():
-        try:
-            img_map = json.loads(img_map_path.read_text(encoding="utf-8"))
-        except Exception:
-            img_map = {}
-
-    dishes = []
-    for _, r in sub.iterrows():
-        name = str(r["dish"])
-        people = int(r["unique_authors"]) if pd.notna(r["unique_authors"]) else 0
-        mentions = int(r["mentions"]) if pd.notna(r["mentions"]) else 0
-        from_rec = bool(r.get("from_recommended", False)) if pd.notna(r.get("from_recommended", False)) else False
-
-        img_info = img_map.get(name) or {}
-        dishes.append({
-            "name": name,
-            "people": people,
-            "mentions": mentions,
-            "from_recommended": from_rec,
-            "image_url": img_info.get("image_url"),
-            "caption": img_info.get("caption"),
-        })
-
-
-    payload = {"dishes": dishes, "partial": partial_flag}
+    payload = _rows_to_payload(sub)
     cache.set(cache_key, payload, timeout=180)
     return JsonResponse(payload)

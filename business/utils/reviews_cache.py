@@ -1,6 +1,6 @@
 # reviews_cache.py
 from __future__ import annotations
-import json, os, subprocess, time
+import json, os, subprocess, time, uuid
 import logging
 import sys
 from pathlib import Path
@@ -135,23 +135,63 @@ def generate_csv_blocking(place_id: str, fast: bool = True) -> None:
     subprocess.check_call(cmd, cwd=str(settings.BASE_DIR), env=env)
 
 
-def enqueue_scrape_job(place_id: str, mode: str, target: int, budget: int, queue_dir: Path = QUEUE_DIR):
+def enqueue_scrape_job(place_id: str, *, mode: str, target: int, budget: float, queue_dir: Path) -> Path:
+    """
+    Write a job JSON atomically into queue_dir.
+    Avoid NamedTemporaryFile quirks; create a tmp in the same dir, fsync, then os.replace.
+    """
     queue_dir.mkdir(parents=True, exist_ok=True)
-    job = {
-        "place_id": place_id,
-        "mode": mode,                # "fast" or "full"
-        "ts": time.time(),
-        "target": int(target),
-        "budget": int(budget),
-    }
-    # Always .json
-    fname = f"{place_id}.{mode}.{int(job['ts'])}.json"
-    tmp = queue_dir / (fname + ".tmp")
-    final = queue_dir / fname
-    tmp.write_text(json.dumps(job), encoding="utf-8")
-    os.replace(tmp, final)          # atomic move
-    return final
 
+    ts = int(time.time())
+    final = queue_dir / f"{place_id}.{mode}.{ts}.json"
+    payload = {
+        "place_id": place_id,
+        "mode": mode,
+        "target": int(target),
+        "budget": float(budget),
+        "enqueued_at": ts,
+    }
+
+    # tmp alongside final to ensure same filesystem (atomic replace)
+    tmp = queue_dir / ('.' + final.name + f".{uuid.uuid4().hex}.tmp")
+
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, final)  # atomic
+        logger.info("📥 wrote job %s", final)
+        return final
+
+    except FileNotFoundError as e:
+        # Dir might have been cleaned between mkdir and write; recreate and retry once.
+        logger.warning("enqueue_scrape_job: %s; retrying once after mkdir", e)
+        queue_dir.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, final)
+        logger.info("📥 wrote job %s (after mkdir)", final)
+        return final
+
+    except Exception as e:
+        # Last resort: write non-atomically so we at least enqueue something.
+        logger.error("enqueue_scrape_job atomic write failed: %s; falling back", e)
+        try:
+            with open(final, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            logger.warning("⚠️ wrote job non-atomically to %s", final)
+            return final
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
 def _has_recent_job(place_id: str, queue_dir: Path, ttl_s: int) -> bool:
     now = time.time()
     for p in queue_dir.glob(f"{place_id}.*.json"):

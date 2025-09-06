@@ -1,4 +1,5 @@
 import gc
+import logging
 import os, csv
 from urllib.parse import urlparse, parse_qs
 
@@ -22,11 +23,12 @@ from unidecode import unidecode
 import inflect
 import spacy
 from functools import lru_cache
+logger = logging.getLogger(__name__)
 
 CACHE_BASE = Path(settings.REVIEWS_CACHE_DIR)
 
 TTL = timedelta(days=7)   # tune as you like
-TABS = {"indian","american","chinese","mexican","italian"}
+TABS = {"popular", "indian","american","chinese","mexican","italian"}
 _ETH_MAP = {
     "southasian":"Indian","indiansubcontinent":"Indian",
     "eastasian":"Chinese","hanchinese":"Chinese","chinese":"Chinese",
@@ -46,7 +48,7 @@ FIELD_HEADERS = [
     "Atmosphere:", "Wait time", "Seating type"
 ]
 
-TAB_LABELS = {"Indian","American","Chinese","Mexican","Italian"}
+TAB_LABELS = {"Popular","Indian","American","Chinese","Mexican","Italian"}
 
 class Command(BaseCommand):
     help = "Scrape Google Maps reviews for a place_id, then build dish_mentions for that place."
@@ -317,25 +319,44 @@ async def scrape_reviews(
             scroll_el = handle.as_element()
             locator = page.locator('div[data-review-id]')
 
-            await locator.first.wait_for(state="visible", timeout=10_000)
-            for _ in range(3):
-                await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.25)")
-                await page.wait_for_timeout(300)
-
-            more_reviews = page.locator('text=/More reviews/').first
-            if await more_reviews.count():
-                await more_reviews.scroll_into_view_if_needed()
-                await more_reviews.click()
-                await page.wait_for_timeout(600)
-
+            # --- Hardened wait: treat "no reviews" as OK and keep going ---
+            have_reviews = False
             try:
-                await page.get_by_role("button", name="Sort reviews").click()
-                menu = page.get_by_role("menu")
-                await menu.wait_for(state="visible", timeout=5_000)
-                await menu.get_by_role("menuitemradio", name="Highest rating").click()
-                await page.wait_for_timeout(250)
+                await locator.first.wait_for(state="visible", timeout=6_000)
+                have_reviews = True
             except Exception:
-                pass
+                # Some places simply don't render review cards (or they’re slow/behind a gate).
+                logger.warning("[reviews] no visible review cards; continuing without review scroll/sort")
+
+            # Only do the expensive review scrolling/sorting if we actually saw reviews
+            if have_reviews:
+                # Nudge a little to trigger lazy loading
+                for _ in range(3):
+                    await scroll_el.evaluate("el => el.scrollBy(0, el.clientHeight * 0.25)")
+                    await page.wait_for_timeout(300)
+
+                # "More reviews" (older UI) — optional
+                try:
+                    more_reviews = page.locator('text=/More reviews/').first
+                    if await more_reviews.count():
+                        await more_reviews.scroll_into_view_if_needed()
+                        await more_reviews.click()
+                        await page.wait_for_timeout(600)
+                except Exception as e:
+                    logger.debug("[reviews] 'More reviews' not clickable: %s", e)
+
+                # Sort → Highest rating (optional)
+                try:
+                    btn = page.get_by_role("button", name="Sort reviews")
+                    if await btn.count():
+                        await btn.click()
+                        menu = page.get_by_role("menu")
+                        await menu.wait_for(state="visible", timeout=5_000)
+                        await menu.get_by_role("menuitemradio", name="Highest rating").click()
+                        await page.wait_for_timeout(250)
+                except Exception as e:
+                    logger.debug("[reviews] sort menu not available: %s", e)
+
 
             if seed_seen_count:
                 curr = await locator.count()
