@@ -72,3 +72,6 @@ ENV/
 
 .envrc
 /var/reviews/
+
+# Claude Code configuration
+CLAUDE.md

@@ -21,6 +21,7 @@ from django.conf     import settings
 from django.http     import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_GET
 from .utils.reviews_cache import dish_csv_path, is_stale, ensure_csv_async, FULL_TARGET, REVIEWS_DIR, QUEUE_DIR
+from .utils.yelp_queue import add_place_id_to_queue
 from django.core.cache import cache
 import pandas as pd
 from pathlib import Path
@@ -452,6 +453,12 @@ def restaurant_recommendations(request):
     eth = (ethnicity or "").strip().lower()
     if eth not in TABS:
         return HttpResponseBadRequest("Invalid ethnicity")
+
+    # Track this place_id for nightly Yelp processing
+    try:
+        add_place_id_to_queue(place_id)
+    except Exception as e:
+        logger.warning(f"Failed to add place_id {place_id} to Yelp queue: {e}")
 
     bypass = (request.GET.get("nocache") == "1")
 
