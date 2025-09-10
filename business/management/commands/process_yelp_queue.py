@@ -26,7 +26,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--target-reviews",
             type=int,
-            default=50,
+            default=150,
             help="Target number of Yelp reviews to scrape per place"
         )
         parser.add_argument(
