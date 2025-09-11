@@ -3,15 +3,17 @@ Yelp Integration Utilities
 Separate module for Google Maps to Yelp business URL conversion and scraping
 """
 
-import re
-import requests
-import json
 import asyncio
+import json
 import logging
+import re
+import time
 from pathlib import Path
-from typing import List, Dict, Optional
-from googlemaps import Client as GoogleMapsClient
+from typing import Dict, List, Optional
+
+import pandas as pd
 from django.conf import settings
+from googlemaps import Client as GoogleMapsClient
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
@@ -452,6 +454,24 @@ async def scrape_yelp_reviews(
             logger.error(f"Scraping error: {e}")
             
         finally:
+            # After scraping reviews, scroll back to top and harvest missing dish images
+            try:
+                await page.evaluate("window.scrollTo(0, 0)")
+                await page.wait_for_timeout(3000)  # Wait for page to settle
+                
+                # Check for missing dishes and harvest images
+                missing_dishes = find_missing_dish_images(out_dir)
+                if missing_dishes:
+                    logger.info(f"Found {len(missing_dishes)} dishes without images, harvesting now")
+                    
+                    harvested_count = await _harvest_images_from_yelp_photos(
+                        page, missing_dishes, out_dir
+                    )
+                    logger.info(f"Successfully harvested {harvested_count} dish images from Yelp")
+                    
+            except Exception as img_error:
+                logger.warning(f"Image harvesting failed: {img_error}")
+                
             await browser.close()
     
     return reviews
@@ -545,6 +565,207 @@ async def extract_author_details(review_elem, author_name):
     
     return details
 
+
+def find_missing_dish_images(out_dir: Path) -> List[str]:
+    """
+    Compare dish_mentions_top5.csv with dish_images.json to find dishes without images.
+    Returns list of dish names that need images.
+    """
+    # Read top dishes from CSV
+    top5_csv = out_dir / "dish_mentions_top5.csv"
+    if not top5_csv.exists():
+        return []
+    
+    try:
+        df = pd.read_csv(top5_csv)
+        top_dishes = df['dish'].unique().tolist()
+    except Exception:
+        return []
+    
+    # Read existing images
+    images_json = out_dir / "dish_images.json"
+    existing_dishes = set()
+    if images_json.exists():
+        try:
+            existing_images = json.loads(images_json.read_text(encoding="utf-8"))
+            existing_dishes = set(existing_images.keys())
+        except Exception:
+            pass
+    
+    # Find missing dishes (case-insensitive matching)
+    missing_dishes = []
+    for dish in top_dishes:
+        # Check exact match first
+        if dish not in existing_dishes:
+            # Check case-insensitive match
+            dish_lower = dish.lower()
+            found = False
+            for existing in existing_dishes:
+                if existing.lower() == dish_lower:
+                    found = True
+                    break
+            if not found:
+                missing_dishes.append(dish)
+    
+    return missing_dishes
+
+
+async def _harvest_images_from_yelp_photos(page, missing_dishes: List[str], out_dir: Path) -> int:
+    """
+    Harvest missing dish images from Yelp photos section using existing page context.
+    Returns number of images successfully harvested.
+    """
+    harvested_count = 0
+    
+    try:
+        # Look for "See all X photos" button
+        photos_selectors = [
+            'span.y-css-3ptwl3:has-text("See all")',         # Your exact class
+            'a[href*="biz_photos"] span:has-text("See all")', # Link to biz_photos with "See all" 
+            'div.photo-header-buttons__09f24__UU4lV a',       # Your exact container class
+            '[class*="photo-header"] a:has-text("photos")',   # Generic photo header
+            'span:has-text("See all") >> xpath=..',           # Parent of "See all" span
+            'a:has-text("photos")',                           # Any link with photos
+        ]
+        
+        photos_link = None
+        for selector in photos_selectors:
+            test_link = page.locator(selector).first
+            if await test_link.count() > 0:
+                photos_link = test_link
+                logger.info(f"Found photos link with selector: {selector}")
+                break
+        
+        if not photos_link:
+            logger.warning("No 'See all photos' link found on Yelp page")
+            return 0
+        
+        # Click to open photos section
+        await photos_link.click()
+        await page.wait_for_timeout(3000)
+        
+        # Find search box for photos
+        search_selectors = [
+            'input[placeholder*="Search photos" i]',           # Your exact example
+            'input[aria-labelledby*="search" i]',             # Search with aria-labelledby  
+            'input.input__09f24__yaqh1',                      # Your specific class
+            'input[class*="inline-search"]',                  # Inline search class
+            'input[type="text"][placeholder*="search" i]',    # Generic search input
+            'input[class*="search"]',                         # Any search-related class
+        ]
+        
+        search_box = None
+        for selector in search_selectors:
+            test_input = page.locator(selector).first
+            if await test_input.count() > 0:
+                search_box = test_input
+                logger.info(f"Found search box with selector: {selector}")
+                break
+        
+        if not search_box:
+            logger.warning("No photo search box found")
+            return 0
+        
+        # Search for each missing dish
+        for dish in missing_dishes[:5]:  # Limit to 5 dishes to avoid overwhelming
+            try:
+                logger.info(f"Searching Yelp photos for: {dish}")
+                
+                # Try multiple search variations
+                search_terms = [dish, dish.lower(), dish.replace(" ", "")]
+                
+                for search_term in search_terms:
+                    # Clear and search for dish
+                    await search_box.fill("")
+                    await search_box.fill(search_term)
+                    await page.keyboard.press("Enter")
+                    await page.wait_for_timeout(3000)  # Longer wait for search results
+                    
+                    # Look for actual dish images (avoid tracking pixels and logos)
+                    image_selectors = [
+                        'img[src*="bphoto"]',  # Yelp business photos (most likely dish images)
+                        'img[alt*="Photo of"][src*="yelp"]',  # Images with photo alt text
+                        'img[loading="eager"][src*="yelp"]',  # Eagerly loaded images
+                        'img[width="100%"][src*="yelp"]',  # Full-width images
+                        'img[src*="yelpcdn.com/bphoto"]',  # Specific yelp photo URLs
+                        'img[src*="s3-media"][src*="bphoto"]',  # S3 business photos only
+                    ]
+                    
+                    # Try to find multiple images and pick the best one based on alt text
+                    found_image = False
+                    for selector in image_selectors:
+                        test_images = page.locator(selector)
+                        count = await test_images.count()
+                        
+                        if count > 0:
+                            # Try multiple images and look for one with matching alt text
+                            for i in range(min(count, 10)):  # Check more images to find dish-specific ones
+                                try:
+                                    img_elem = test_images.nth(i)
+                                    img_src = await img_elem.get_attribute('src')
+                                    alt_text = await img_elem.get_attribute('alt') or ""
+                                    
+                                    # Validate it's not a tracking pixel or business logo
+                                    exclude_patterns = ['adroll', 'doubleclick', 'facebook', 'google-analytics', 'businessregularlogo', 'logo', '/ms.jpg']
+                                    if img_src and not any(exclude in img_src for exclude in exclude_patterns):
+                                        
+                                        # Check if alt text contains the dish name (case-insensitive)
+                                        dish_lower = dish.lower()
+                                        alt_lower = alt_text.lower()
+                                        
+                                        # Look for exact dish name or key words from dish name in alt text
+                                        dish_words = dish_lower.split()
+                                        alt_contains_dish = (
+                                            dish_lower in alt_lower or
+                                            any(word in alt_lower for word in dish_words if len(word) > 3)  # Skip short words like "and"
+                                        )
+                                        
+                                        if alt_contains_dish:
+                                            logger.info(f"Found matching image for {dish}: alt='{alt_text}', src={img_src}")
+                                            
+                                            # Save to dish_images.json
+                                            images_json = out_dir / "dish_images.json"
+                                            existing = {}
+                                            if images_json.exists():
+                                                try:
+                                                    existing = json.loads(images_json.read_text(encoding="utf-8"))
+                                                except Exception:
+                                                    pass
+                                            
+                                            existing[dish] = {
+                                                "image_url": img_src,
+                                                "caption": dish
+                                            }
+                                            
+                                            images_json.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+                                            harvested_count += 1
+                                            logger.info(f"✅ Harvested image for {dish}: {img_src}")
+                                            found_image = True
+                                            break
+                                        
+                                except Exception:
+                                    continue
+                            
+                            if found_image:
+                                break
+                        
+                        if found_image:
+                            break
+                    
+                    if found_image:
+                        break  # Don't try other search terms if we found an image
+                
+                if not found_image:
+                    logger.warning(f"No suitable image found for {dish}")
+            
+            except Exception as e:
+                logger.warning(f"Failed to harvest image for {dish}: {e}")
+                continue
+    
+    except Exception as e:
+        logger.error(f"Photo harvesting error: {e}")
+    
+    return harvested_count
 
 async def extract_yelp_review_data(review_elem):
     """Extract review data from Yelp review element using generic selectors"""
@@ -723,10 +944,12 @@ def scrape_yelp_from_place_id(place_id: str, target_reviews: int = 50, fast: boo
         print(f"✅ Updated dish_mentions.csv and dish_mentions_top5.csv for {place_id}")
         logger.info(f"Updated dish_mentions CSVs for {place_id}")
         
+        # After updating CSVs, image harvesting is now integrated into review scraping
+        logger.info("Image harvesting completed during review scraping")
+        
         # Log to scrape.log file
         log_file = out_dir / "scrape.log"
         with open(log_file, "a", encoding="utf-8") as f:
-            import time
             timestamp = time.strftime('%F %T')
             review_count = len(reviews) if reviews else 0
             f.write(f"[{timestamp}] YELP SUCCESS: {restaurant_name} -> {review_count} total reviews, target: {target_reviews}\n")
@@ -738,7 +961,6 @@ def scrape_yelp_from_place_id(place_id: str, target_reviews: int = 50, fast: boo
         # Log error to scrape.log file  
         log_file = out_dir / "scrape.log"
         with open(log_file, "a", encoding="utf-8") as f:
-            import time
             timestamp = time.strftime('%F %T')
             f.write(f"[{timestamp}] YELP ERROR: {restaurant_name} -> Failed to update CSVs: {e}\n")
     
