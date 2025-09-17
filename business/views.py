@@ -20,7 +20,7 @@ from openai import OpenAI
 from django.conf     import settings
 from django.http     import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_GET
-from .utils.reviews_cache import dish_csv_path, is_stale, ensure_csv_async, FULL_TARGET, REVIEWS_DIR, QUEUE_DIR
+from .utils.reviews_cache import dish_csv_path, category_csv_path, is_stale, ensure_csv_async, FULL_TARGET, REVIEWS_DIR, QUEUE_DIR
 from .utils.yelp_queue import add_place_id_to_queue
 from django.core.cache import cache
 import pandas as pd
@@ -447,12 +447,18 @@ def _count_reviews(place_id: str) -> int:
 def restaurant_recommendations(request):
     place_id  = request.GET.get("place_id")
     ethnicity = request.GET.get("ethnicity")
+    category = request.GET.get("category", "restaurant")  # Keep for search filtering but don't affect CSV naming
+    
     if not place_id or not ethnicity:
         return HttpResponseBadRequest("Missing place_id or ethnicity")
 
     eth = (ethnicity or "").strip().lower()
     if eth not in TABS:
         return HttpResponseBadRequest("Invalid ethnicity")
+        
+    # Validate category for search filtering
+    if category not in ["restaurant", "coffee", "bar", "brunch", "dessert"]:
+        return HttpResponseBadRequest("Invalid category. Must be 'restaurant', 'coffee', 'bar', 'brunch', or 'dessert'")
 
     # Track this place_id for nightly Yelp processing
     try:
@@ -462,7 +468,8 @@ def restaurant_recommendations(request):
 
     bypass = (request.GET.get("nocache") == "1")
 
-    csv_path: Path = dish_csv_path(place_id)
+    # Always use unified dish_mentions.csv regardless of category
+    csv_path: Path = category_csv_path(place_id, category)  # This now always returns dish_mentions.csv
     place_root: Path = csv_path.parent
 
     # --- Cold-miss guard to avoid infinite spinner & ensure a response every time
@@ -486,10 +493,11 @@ def restaurant_recommendations(request):
             except Exception:
                 pass
             try:
-                enq = ensure_csv_async(place_id, fast=True)
+                enq = ensure_csv_async(place_id, fast=True, category=category)
                 logger.info("COLD MISS %s — launched FAST (enqueued=%s)", place_id, enq)
             except Exception as e:
                 logger.exception("COLD MISS %s — enqueue failed: %s", place_id, e)
+            # Return empty result with generic key
             return JsonResponse({"dishes": [], "partial": True})
 
         # Subsequent cold misses: decide whether to keep polling or stop
@@ -497,7 +505,7 @@ def restaurant_recommendations(request):
         if age is not None and age <= COLD_MAX_WAIT_S:
             logger.info("COLD MISS %s (%.0fs) — keep polling", place_id, age)
             try:
-                ensure_csv_async(place_id, fast=True)  # safe: de-duped inside
+                ensure_csv_async(place_id, fast=True, category=category)  # safe: de-duped inside
             except Exception:
                 pass
             return JsonResponse({"dishes": [], "partial": True})
@@ -518,7 +526,7 @@ def restaurant_recommendations(request):
     # If partial → enqueue one FULL backfill (de-duped inside ensure_csv_async)
     if partial_flag:
         try:
-            ensure_csv_async(place_id, fast=False)
+            ensure_csv_async(place_id, fast=False, category=category)
         except Exception:
             pass
 
@@ -528,7 +536,7 @@ def restaurant_recommendations(request):
     except Exception:
         mtime = 0
 
-    cache_key = f"rr:{place_id}:{eth}:{mtime}"
+    cache_key = f"rr:{place_id}:{eth}:{category}:{mtime}"
     if not bypass:
         cached = cache.get(cache_key)
         if cached is not None:
@@ -553,7 +561,7 @@ def restaurant_recommendations(request):
     def _rows_to_payload(rows: pd.DataFrame):
         out = []
         for _, r in rows.iterrows():
-            name = str(r["dish"])
+            name = str(r["dish"])  # always use "dish" column name
             people = int(r.get("unique_authors") or 0)
             mentions = int(r.get("mentions") or 0)
             from_rec = bool(r.get("from_recommended", False))
@@ -566,6 +574,8 @@ def restaurant_recommendations(request):
                 "image_url": img_info.get("image_url"),
                 "caption": img_info.get("caption"),
             })
+        
+        # Always use "dishes" key - it's just "recommended items"
         return {"dishes": out, "partial": partial_flag}
 
     # =========================

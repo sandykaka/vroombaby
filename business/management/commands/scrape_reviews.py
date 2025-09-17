@@ -60,9 +60,11 @@ class Command(BaseCommand):
         parser.add_argument("--out-dir")
         parser.add_argument("--append", action="store_true")
         parser.add_argument("--fast", action="store_true")
+        parser.add_argument("--category", default="restaurant", help="Category: restaurant, coffee, bar, brunch, or dessert")
 
     def handle(self, *args, **options):
         place_id = options["place_id"]
+        category = options.get("category", "restaurant")
         target = int(options.get("target") or 0)
         time_budget = int(options.get("time_budget") or 0)
         if options.get("fast"):
@@ -75,7 +77,7 @@ class Command(BaseCommand):
         out_dir = Path(options["out_dir"]) if options.get("out_dir") else (default_base / place_id)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1) Resolve Google Maps canonical URL
+        # 1) Resolve Google Maps canonical URL (no need for business types anymore)
         gmaps = GoogleMapsClient(key=settings.GOOGLE_API_KEY)
         try:
             resp = gmaps.place(place_id=place_id, fields=["url"])
@@ -96,12 +98,13 @@ class Command(BaseCommand):
             sep = "&" if "?" in place_url else "?"
             place_url = f"{place_url}{sep}hl=en"
 
-        # 3) Scrape (async)
+        # 3) Scrape (async) - Pass category from frontend
         asyncio.run( scrape_reviews(
             place_url=place_url, place_id=place_id, target_reviews=target, time_budget=time_budget, out_dir=out_dir,
             build_mentions_now=True,
             harvest_images_now=True,
             top_k_images=5,
+            category=category,  # Pass category instead of business_types
         ))
 
         # Clear lock if our run created it
@@ -124,6 +127,38 @@ _SMALL = {"and","of","with","on","in","to","for","by","at"}
 def _singular(tok: str) -> str:
     s = _inflect.singular_noun(tok)
     return s if isinstance(s, str) and s else tok
+
+def smart_normalize_dish(text: str) -> str:
+    """
+    Smart normalization to handle common variations without hardcoded lexicons
+    """
+    if not text:
+        return ""
+    
+    t = text.strip()
+    
+    # Handle common abbreviations and symbols
+    t = re.sub(r'\b&\b', ' and ', t)  # & -> and
+    t = re.sub(r'\bn\b', ' and ', t)  # n -> and (in context like "mac n cheese")
+    t = re.sub(r'\bn\'\b', ' and ', t)  # n' -> and 
+    
+    # Handle "the" prefix (case insensitive)
+    t = re.sub(r'^the\s+', '', t, flags=re.I)
+    
+    # Handle common misspellings
+    misspellings = {
+        r'\bcappucino\b': 'cappuccino',
+        r'\bexpresso\b': 'espresso', 
+        r'\bmocha\b': 'mocha',
+    }
+    for wrong, right in misspellings.items():
+        t = re.sub(wrong, right, t, flags=re.I)
+    
+    # Clean up extra whitespace
+    t = re.sub(r'\s+', ' ', t).strip()
+    
+    # Title case for display
+    return t.title() if t else ""
 
 @lru_cache(maxsize=4096)
 def normalize_dish_key_and_label(text: str) -> Tuple[str, str]:
@@ -151,7 +186,7 @@ def normalize_dish_key_and_label(text: str) -> Tuple[str, str]:
         if s in {"&", "n", "n."}:
             s = "and"
 
-        s = re.sub(r"[’'`]", "", s)          # apostrophes
+        s = re.sub(r"[''`]", "", s)          # apostrophes
         s = re.sub(r"[-_/]", " ", s)         # separators -> space
         s = re.sub(r"[^a-z0-9\s]", " ", s)   # other punct -> space
         s = re.sub(r"\s+", " ", s).strip()
@@ -206,10 +241,11 @@ def _read_seed_reviews(out_dir: Path):
     return data, seen_ids, seen_text
 
 
-def _aggregate_now(out_dir: Path, label: str = ""):  # === NEW ===
+
+def _aggregate_now(out_dir: Path, label: str = "", category: str = "restaurant"):  # === SIMPLIFIED ===
     """
-    Rebuild authors.csv and dish_mentions.csv from current reviews.json.
-    Shield any exception so scraping can continue.
+    Rebuild authors.csv and dish_mentions CSV from current reviews.json.
+    Always creates dish_mentions.csv regardless of category - category is just for search filtering.
     """
     try:
         reviews_json = str(out_dir / "reviews.json")
@@ -218,23 +254,29 @@ def _aggregate_now(out_dir: Path, label: str = ""):  # === NEW ===
         # authors (incremental if your helper supports it)
         authors_csv_path = write_or_update_authors_csv(reviews_json, authors_csv)
 
-        # choose lexicon
-        prefer   = out_dir / "dish_lexicon.csv"
-        fallback = Path(settings.BASE_DIR) / "data" / "dish_lexicon.csv"
-        lexicon_csv_path = str(prefer if prefer.exists() else fallback)
+        print(f"📊 Processing place as category: {category} (unified dish extraction)")
 
-        # aggregate to dish_mentions.csv
+        # Always use dish_lexicon.csv - it covers food, drinks, and other items
+        lexicon_csv_path = get_lexicon_path_for_category(out_dir, "restaurant")
+        
+        # Always use same file naming structure
+        out_csv = str(out_dir / "dish_mentions.csv")
+        save_raw_csv = str(out_dir / "dish_mentions_raw.csv")
+        out_csv_topk = str(out_dir / "dish_mentions_top5.csv")
+
+        # aggregate to unified CSV - extract whatever people recommend
         build_dish_mentions(
             reviews_json=reviews_json,
             authors_csv=authors_csv_path,
             lexicon_csv=lexicon_csv_path,
-            out_csv=str(out_dir / "dish_mentions.csv"),
-            save_raw_csv=str(out_dir / "dish_mentions_raw.csv"),
+            out_csv=out_csv,
+            save_raw_csv=save_raw_csv,
             mode="both",
-            limit_per_ethnicity=5,                # writes dish_mentions_top5.csv
-            out_csv_topk=str(out_dir / "dish_mentions_top5.csv"),
+            limit_per_ethnicity=5,
+            out_csv_topk=out_csv_topk,
         )
-        print(f"🟢 aggregated ({label}) → {out_dir/'dish_mentions.csv'}")
+        print(f"🟢 aggregated recommendations ({label}) → {out_csv}")
+        
     except Exception as e:
         print(f"⚠️ aggregate failed ({label}): {e}")
 
@@ -248,6 +290,7 @@ async def scrape_reviews(
         build_mentions_now: bool = True,
         harvest_images_now: bool = True,
         top_k_images: int = 5,
+        category: str = "restaurant",  # Use category from frontend instead of business_types
 ):
     # ---- locks ----
     lock = out_dir / ".refresh.lock"
@@ -456,7 +499,7 @@ async def scrape_reviews(
         # ---------- FAST aggregate (optional, while browser still open) ----------
         if build_mentions_now:
             try:
-                _aggregate_now(out_dir, label="fast")
+                _aggregate_now(out_dir, label="fast", category=category)
             except Exception as e:
                 print(f"⚠️ aggregate failed (fast): {e}")
 
@@ -492,7 +535,7 @@ async def scrape_reviews(
 
     # Aggregate outside the browser for a final, consistent output
     if not build_mentions_now:
-        _aggregate_now(out_dir, label="post-scrape")
+        _aggregate_now(out_dir, label="post-scrape", category=category)
     for name in (".refresh.lock", ".enqueue.lock"):
         try: (out_dir / name).unlink(missing_ok=True)
         except Exception: pass
@@ -550,10 +593,13 @@ def map_group_to_ui(group_chain: Optional[str]) -> str:
         if t in _ETH_MAP: return _ETH_MAP[t]
     return toks[0].capitalize() if toks else "Unknown"
 
-# ---------- “Recommended dishes …” extractor ----------
-_RE_RECOMMENDED = re.compile(r"(?:^|\n)\s*recommended\s+dish(?:es)?\s*[:\-]?\s*", re.I)
-_RE_SECTION_STOP = re.compile(r"(?:\n{2,}|^|\n)(?:Food:|Service:|Atmosphere:|Price per person|Wait time|Seating type|Photos|Like|Share)\b", re.I)
-_SPLIT_DISHES = re.compile(r"\s*(?:,|·|•|/|\band\b|\&)\s*", re.I)
+# ---------- "Recommended dishes …" extractor ----------
+_RE_RECOMMENDED = re.compile(r"(?:^|\n)\s*recommended\s+(?:dish(?:es)?|drink(?:s)?|item(?:s)?|beverage(?:s)?)\s*[:\-]?\s*", re.I)
+_RE_SECTION_STOP = re.compile(r"(?:\n{2,}|^|\n)(?:Food:|Service:|Atmosphere:|Price per person|Wait time|Seating type|Photos|Like|Share|Parking|Dietary|Restriction|Vegetarian|Vegan|Gluten|Alternative|Milk|Option)\b", re.I)
+_SPLIT_DISHES = re.compile(r"\s*(?:,|·|•|/|\&)\s*", re.I)
+
+# Noise filtering patterns
+_NOISE_PATTERNS = re.compile(r"\b(?:parking|wheelchair|kid[-\s]?friendly|dietary\s+restriction|vegetarian\s+(?:menu|offering|option)|gluten[-\s]?free|vegan\s+milk|alternative\s+milk|plenty\s+of\s+parking|outdoor\s+seating|dog\s+friendly|free\s+parking)\b", re.I)
 
 def extract_recommended_dishes(text: str) -> List[str]:
     if not text: return []
@@ -562,18 +608,59 @@ def extract_recommended_dishes(text: str) -> List[str]:
     chunk = text[m.end():]
     stop = _RE_SECTION_STOP.search(chunk)
     if stop: chunk = chunk[:stop.start()]
-    chunk = chunk.strip()[:300]
+    
+    # Limit chunk length more aggressively for cleaner extraction
+    chunk = chunk.strip()[:150]  # Reduced from 300 to 150
+    
     parts = [p.strip() for p in _SPLIT_DISHES.split(chunk) if p.strip()]
     out, seen = [], set()
     for p in parts:
         p = re.sub(r'^[\-\u2022\u2023\u25E6\u2043\u2219"\']+\s*', "", p).strip()
         if len(p) < 2: continue
+        
+        # Filter out noise patterns
+        if _NOISE_PATTERNS.search(p):
+            continue
+        
+        # Clean up obvious nonsense like repeated letters at the end
+        p = re.sub(r'\s+([a-zA-Z])\1{3,}\s*$', '', p).strip()  # Remove "mmmmm", "ahhhhh" etc at end
+        if not p or len(p) < 2:
+            continue
+            
+        # Apply smart normalization
+        p = smart_normalize_dish(p)
+        if not p:
+            continue
+            
+        # Limit individual item length
+        if len(p) > 50:  # Skip overly long items
+            continue
+            
+        # Clean up whitespace and format
         p = re.sub(r"\s+", " ", p).strip()
-        if not re.search(r"[A-Z]{2,}", p): p = p.title()
+        
         key = p.lower()
         if key not in seen:
             seen.add(key); out.append(p)
     return out
+
+def get_lexicon_path_for_category(out_dir: Path, category: str = "restaurant") -> str:
+    """Get the appropriate lexicon file for the given category"""
+    category_lexicons = {
+        "restaurant": "dish_lexicon.csv",
+        "coffee": "drink_lexicon.csv", 
+        "bar": "cocktail_lexicon.csv",
+        "brunch": "brunch_lexicon.csv",
+        "dessert": "dessert_lexicon.csv"
+    }
+    
+    lexicon_name = category_lexicons.get(category, "dish_lexicon.csv")
+    
+    # Check local (place-specific) lexicon first, then global
+    prefer = out_dir / lexicon_name
+    fallback = Path(settings.BASE_DIR) / lexicon_name
+    
+    return str(prefer if prefer.exists() else fallback)
 
 # ---------- LEXICON support ----------
 def load_lexicon(lexicon_csv: Optional[str]) -> Dict[str, List[str]]:
@@ -589,8 +676,9 @@ def load_lexicon(lexicon_csv: Optional[str]) -> Dict[str, List[str]]:
         for _, r in df.iterrows():
             lex.setdefault(r["dish"].strip(), []).append(r["synonym"].strip())
         return lex
-    # minimal fallback so you’re never blocked
+    # minimal fallback so you're never blocked
     return {
+        # Restaurant items
         "Fried Chicken": ["fried chicken", "buttermilk fried chicken"],
         "Tavern Burger": ["tavern burger", "the tavern burger", "burger and fries"],
         "Deviled Eggs": ["deviled eggs", "southern deviled eggs"],
@@ -598,6 +686,32 @@ def load_lexicon(lexicon_csv: Optional[str]) -> Dict[str, List[str]]:
         "Dumplings": ["dumpling", "dumplings"],
         "Fried Rice": ["fried rice"],
         "Pasta": ["pasta"],
+        
+        # Coffee drinks
+        "Latte": ["latte", "café latte", "caffe latte"],
+        "Cappuccino": ["cappuccino", "cappucino", "cappuchino"],
+        "Americano": ["americano", "café americano"],
+        "Espresso": ["espresso", "expresso"],
+        "Mocha": ["mocha", "café mocha", "chocolate mocha"],
+        "Cold Brew": ["cold brew", "cold brew coffee"],
+        "Drip Coffee": ["drip coffee", "regular coffee", "house coffee"],
+        "Macchiato": ["macchiato", "caramel macchiato"],
+        "Flat White": ["flat white"],
+        "Cortado": ["cortado"],
+        
+        # Cafe food items
+        "Avocado Toast": ["avocado toast", "avo toast"],
+        "Croissant": ["croissant", "butter croissant"],
+        "Danish": ["danish", "strawberry danish", "cheese danish"],
+        "Muffin": ["muffin", "blueberry muffin", "chocolate muffin"],
+        "Bagel": ["bagel", "everything bagel", "sesame bagel"],
+        "Scone": ["scone", "blueberry scone"],
+        "Breakfast Burrito": ["breakfast burrito", "morning burrito"],
+        "Overnight Oats": ["overnight oats", "oatmeal"],
+        "Frittata": ["frittata", "egg frittata"],
+        "Quiche": ["quiche"],
+        "Coffee Cake": ["coffee cake"],
+        "Pastry": ["pastry", "sweet pastry"],
     }
 
 def _phrase_to_regex(phrase: str) -> str:
@@ -685,32 +799,47 @@ def build_dish_mentions(
         dishes_rec = extract_recommended_dishes(rtext) if mode in ("recommended","both") else []
         dishes_lex = extract_with_lexicon(rtext, idx) if use_lex else []
 
-        # build a set of normalized KEYS that came from the "recommended" extractor
-        rec_key_set = set()
+        # Track keys for this specific review to avoid duplicates
+        seen_keys_this_review = set()
+
+        # PRIORITY: Recommended dishes should ALWAYS be included, even with poor normalization
         for d in dishes_rec:
-            k, _ = normalize_dish_key_and_label(d)
-            if k:
-                rec_key_set.add(k)
-
-        # union by canonical key, keep a pretty label
-        seen_keys = set()
-        for d in (dishes_rec + dishes_lex):
             k, label = normalize_dish_key_and_label(d)
-            if not k or k in seen_keys:
-                continue
-            seen_keys.add(k)
+            # For recommended dishes, be more lenient - use original text if normalization fails
+            if not k and d.strip():
+                k = d.strip().lower()
+                label = smart_normalize_dish(d) or d.strip()
+            
+            if k and label and k not in seen_keys_this_review:
+                seen_keys_this_review.add(k)
+                rows.append({
+                    "author_key": row["author_key"],
+                    "author": row["author"],
+                    "group": row["group"],
+                    "tab": row["tab"],
+                    "ethnicity_ui": row["ethnicity_ui"],
+                    "dish_key": k,
+                    "dish": label,
+                    "text": rtext,
+                    "source": "recommended",
+                })
 
-            rows.append({
-                "author_key": row["author_key"],
-                "author": row["author"],
-                "group": row["group"],
-                "tab": row["tab"],
-                "ethnicity_ui": row["ethnicity_ui"],
-                "dish_key": k,          # <-- canonical for grouping
-                "dish": label,          # <-- pretty label for UI
-                "text": rtext,
-                "source": ("recommended" if k in rec_key_set else "lexicon"),
-            })
+        # Add lexicon matches only if they don't conflict with recommended dishes from this review
+        for d in dishes_lex:
+            k, label = normalize_dish_key_and_label(d)
+            if k and label and k not in seen_keys_this_review:
+                seen_keys_this_review.add(k)
+                rows.append({
+                    "author_key": row["author_key"],
+                    "author": row["author"],
+                    "group": row["group"],
+                    "tab": row["tab"],
+                    "ethnicity_ui": row["ethnicity_ui"],
+                    "dish_key": k,
+                    "dish": label,
+                    "text": rtext,
+                    "source": "lexicon",
+                })
     raw = pd.DataFrame(rows)
 
     # optional raw dump

@@ -280,6 +280,7 @@ async def scrape_yelp_reviews(
             
             
             seen_review_ids = set(r.get('id', '') for r in reviews)
+            seen_authors = set(r.get('author', '').strip() for r in reviews if r.get('author', '').strip())
             scraped_count = 0
             yelp_reviews_added = 0  # Track only new Yelp reviews
             pages_processed = 0  # Track pages to avoid infinite scrolling
@@ -386,18 +387,27 @@ async def scrape_yelp_reviews(
                         # Extract review data
                         review_data = await extract_yelp_review_data(review_elem)
                         
-                        if review_data and review_data['id'] not in seen_review_ids:
-                            reviews.append(review_data)
-                            seen_review_ids.add(review_data['id'])
-                            new_reviews_this_batch += 1
-                            scraped_count += 1
-                            yelp_reviews_added += 1  # Increment counter for new Yelp reviews
+                        if review_data:
+                            author = review_data.get('author', '').strip()
+                            review_id = review_data.get('id', '')
                             
-                            print(f"✅ Scraped review #{scraped_count}: {review_data['author']} - {len(review_data['text'])} chars")
-                            logger.debug(f"Scraped review #{scraped_count}: {review_data['author']} - {len(review_data['text'])} chars")
-                            
-                        elif review_data and review_data['id'] in seen_review_ids:
-                            pass  # Skip silently - duplicate
+                            # Check for duplicates by author name first (primary check)
+                            if author and author in seen_authors:
+                                pass  # Skip silently - author already exists
+                            elif review_id in seen_review_ids:
+                                pass  # Skip silently - review ID duplicate
+                            else:
+                                # Add the review
+                                reviews.append(review_data)
+                                if review_id:
+                                    seen_review_ids.add(review_id)
+                                if author:
+                                    seen_authors.add(author)
+                                new_reviews_this_batch += 1
+                                scraped_count += 1
+                                yelp_reviews_added += 1  # Increment counter for new Yelp reviews
+                                
+                                logger.info(f"✅ Scraped review #{scraped_count}: {author} - {len(review_data['text'])} chars")
                         else:
                             pass  # Skip silently - couldn't extract
                             
@@ -667,7 +677,7 @@ async def _harvest_images_from_yelp_photos(page, missing_dishes: List[str], out_
             return 0
         
         # Search for each missing dish
-        for dish in missing_dishes[:5]:  # Limit to 5 dishes to avoid overwhelming
+        for dish in missing_dishes:  # Process all missing dishes
             try:
                 logger.info(f"Searching Yelp photos for: {dish}")
                 

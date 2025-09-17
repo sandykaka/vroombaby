@@ -66,6 +66,10 @@ def pick_next(jobs):
 def dish_csv_path(place_id: str) -> Path:
     return place_dir(place_id) / "dish_mentions.csv"
 
+def category_csv_path(place_id: str, category: str = "restaurant") -> Path:
+    """Always returns dish_mentions.csv - category is just for search, not for file naming"""
+    return place_dir(place_id) / "dish_mentions.csv"
+
 def reviews_json_path(place_id: str) -> Path:
     return place_dir(place_id) / "reviews.json"
 
@@ -135,7 +139,7 @@ def generate_csv_blocking(place_id: str, fast: bool = True) -> None:
     subprocess.check_call(cmd, cwd=str(settings.BASE_DIR), env=env)
 
 
-def enqueue_scrape_job(place_id: str, *, mode: str, target: int, budget: float, queue_dir: Path) -> Path:
+def enqueue_scrape_job(place_id: str, *, mode: str, target: int, budget: float, queue_dir: Path, category: str = "restaurant") -> Path:
     """
     Write a job JSON atomically into queue_dir.
     Avoid NamedTemporaryFile quirks; create a tmp in the same dir, fsync, then os.replace.
@@ -149,6 +153,7 @@ def enqueue_scrape_job(place_id: str, *, mode: str, target: int, budget: float, 
         "mode": mode,
         "target": int(target),
         "budget": float(budget),
+        "category": category,  # Add category to job payload
         "enqueued_at": ts,
     }
 
@@ -231,6 +236,7 @@ def _acquire_enqueue_lock(dirpath: Path, ttl_s: int) -> bool:
 def ensure_csv_async(
         place_id: str,
         fast: bool,
+        category: str = "restaurant",  # Keep parameter for API compatibility but ignore it
         queue_dir: Path = QUEUE_DIR,
         dedupe_ttl_s: int = DEDUP_TTL_S
 ) -> bool:
@@ -301,6 +307,6 @@ def ensure_csv_async(
     target = FAST_TARGET if fast else FULL_TARGET
     budget = FAST_BUDGET if fast else FULL_BUDGET
 
-    job_path = enqueue_scrape_job(place_id, mode=mode, target=target, budget=budget, queue_dir=queue_dir)
+    job_path = enqueue_scrape_job(place_id, mode=mode, target=target, budget=budget, queue_dir=queue_dir, category=category)
     logger.info("📥 ENQUEUED %s job %s → %s", mode.upper(), place_id, job_path)
     return True
