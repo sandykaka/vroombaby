@@ -178,30 +178,62 @@ AUTHORS_CSV = BASE_DIR / "data" / "authors.csv"
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {name} {process:d} {thread:d} {message}',
+            'style': '{',
+            'datefmt': '%Y-%m-%d %H:%M:%S',
+        },
+        'simple': {
+            'format': '{asctime} [{levelname}] {name}: {message}',
+            'style': '{',
+            'datefmt': '%Y-%m-%d %H:%M:%S',
+        },
+    },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
+            'formatter': 'simple',
         },
-        # Optionally add file handlers:
         'file': {
-            'class': 'logging.FileHandler',
+            'class': 'logging.handlers.RotatingFileHandler',
             'filename': '/home/ubuntu/vroombaby/logs/django_error.log',
+            'maxBytes': 10 * 1024 * 1024,  # 10MB
+            'backupCount': 5,
+            'formatter': 'verbose',
+        },
+        'file_debug': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': '/home/ubuntu/vroombaby/logs/django_debug.log',
+            'maxBytes': 10 * 1024 * 1024,  # 10MB
+            'backupCount': 3,
+            'formatter': 'simple',
         },
     },
     'loggers': {
         'django': {
             'handlers': ['console', 'file'],
-            'level': 'DEBUG',
+            'level': 'INFO',  # Changed from DEBUG to reduce noise
+            'propagate': False,
         },
-        'website1': {  # Replace 'your_app' with your app's name.
-            'handlers': ['console', 'file'],
-            'level': 'DEBUG',
-            'propagate': True,
+        'django.request': {
+            'handlers': ['file'],
+            'level': 'ERROR',
+            'propagate': False,
         },
-        'business': {  # Replace 'your_app' with your app's name.
-            'handlers': ['console', 'file'],
+        'website1': {
+            'handlers': ['console', 'file_debug'],
             'level': 'DEBUG',
-            'propagate': True,
+            'propagate': False,
         },
+        'business': {
+            'handlers': ['console', 'file_debug'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'WARNING',
     },
 }
