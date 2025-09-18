@@ -185,7 +185,7 @@ LOGGING = {
         # Optionally add file handlers:
         'file': {
             'class': 'logging.FileHandler',
-            'filename': '/Users/sandeshkakade/gitRepos/vroombaby/logs/django_error.log',
+            'filename': '/home/ubuntu/vroombaby/logs/django_error.log',
         },
     },
     'loggers': {
