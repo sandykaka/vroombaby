@@ -25,8 +25,42 @@ from .utils.yelp_queue import add_place_id_to_queue
 from django.core.cache import cache
 import pandas as pd
 from pathlib import Path
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+def get_weekly_hours(contact_info):
+    """Extract weekly hours from contact_info"""
+    # Try current_opening_hours first
+    current_hours = contact_info.get("current_opening_hours")
+    if current_hours and isinstance(current_hours, dict):
+        weekday_text = current_hours.get("weekday_text", [])
+        if weekday_text:
+            return weekday_text
+    
+    # Fallback to regular opening_hours
+    opening_hours = contact_info.get("opening_hours")
+    if opening_hours and isinstance(opening_hours, dict):
+        weekday_text = opening_hours.get("weekday_text", [])
+        if weekday_text:
+            return weekday_text
+    
+    return None
+
+def _clean_website_url(url):
+    """Clean website URL by removing query parameters and tracking info"""
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+        # Keep only scheme, netloc, and path - remove query parameters
+        clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        # Remove trailing slash for consistency
+        if clean_url.endswith('/') and len(clean_url) > 1:
+            clean_url = clean_url.rstrip('/')
+        return clean_url
+    except Exception:
+        return url  # Return original if parsing fails
 
 def index(request):
     return render(request, 'business/index.html')
@@ -442,6 +476,138 @@ def _count_reviews(place_id: str) -> int:
         return len(data) if isinstance(data, list) else 0
     except Exception:
         return 0
+
+@require_GET
+def restaurant_contact_info(request):
+    """Get cached contact info for a restaurant (phone, website, hours)."""
+    place_id = request.GET.get("place_id")
+    
+    if not place_id:
+        return HttpResponseBadRequest("Missing place_id parameter")
+    
+    # Path to cached contact info
+    reviews_dir = Path(settings.BASE_DIR) / "var" / "reviews" / place_id
+    contact_file = reviews_dir / "contact_info.json"
+    
+    contact_info = None
+    
+    # Check if contact info exists and is fresh (< 30 days)
+    if contact_file.exists():
+        try:
+            with open(contact_file, 'r', encoding='utf-8') as f:
+                cached_contact = json.load(f)
+                cached_time = pd.to_datetime(cached_contact.get('cached_at', '1970-01-01'))
+                age_days = (pd.Timestamp.now() - cached_time).days
+                
+                if age_days < 30:  # Contact info is fresh
+                    contact_info = cached_contact
+                    logger.info(f"Using cached contact info for {place_id} (age: {age_days} days)")
+                else:
+                    logger.info(f"Contact info stale for {place_id} (age: {age_days} days), refreshing")
+        except Exception as e:
+            logger.warning(f"Error reading cached contact info: {e}")
+    
+    # Fetch contact info if not cached or stale
+    if not contact_info:
+        try:
+            # Make sure directory exists
+            reviews_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Fetch from Google Places API
+            gmaps = googlemaps.Client(key=settings.GOOGLE_API_KEY)
+            resp = gmaps.place(place_id=place_id, fields=[
+                "name", "formatted_phone_number", "website", 
+                "opening_hours", "current_opening_hours", "rating", "user_ratings_total"
+            ])
+            place_data = resp["result"]
+            
+            # Extract and structure contact info
+            contact_info = {
+                "name": place_data.get("name"),
+                "phone": place_data.get("formatted_phone_number"),
+                "website": _clean_website_url(place_data.get("website")),
+                "rating": place_data.get("rating"),
+                "user_ratings_total": place_data.get("user_ratings_total"),
+                "current_opening_hours": place_data.get("current_opening_hours"),
+                "opening_hours": place_data.get("opening_hours"),
+                "cached_at": pd.Timestamp.now().isoformat(),
+                "place_id": place_id
+            }
+            
+            # Save contact info to file
+            with open(contact_file, 'w', encoding='utf-8') as f:
+                json.dump(contact_info, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"Cached fresh contact info for {place_id}")
+            
+        except Exception as e:
+            logger.error(f"Error fetching contact info for {place_id}: {e}")
+            return JsonResponse({
+                "error": "Failed to fetch contact info",
+                "details": str(e)
+            }, status=500)
+    
+    # Check if data has error
+    if "error" in contact_info:
+        return JsonResponse({
+            "error": "Failed to fetch contact info",
+            "details": contact_info["error"]
+        }, status=500)
+    
+    # Extract today's hours from opening_hours - always return a string
+    today_hours = "Hours not available"
+    
+    # Try current_opening_hours first (most accurate)
+    current_hours = contact_info.get("current_opening_hours")
+    if current_hours and isinstance(current_hours, dict):
+        weekday_text = current_hours.get("weekday_text", [])
+        if weekday_text:
+            try:
+                import datetime
+                today_index = datetime.datetime.now().weekday()  # 0=Monday, 1=Tuesday, ..., 6=Sunday
+                # Google's weekday_text format: [Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday]
+                # So we can use today_index directly
+                if 0 <= today_index < len(weekday_text):
+                    today_hours = weekday_text[today_index]
+                    # Remove day prefix (e.g. "Monday: 8:00 AM – 8:00 PM" -> "8:00 AM – 8:00 PM")
+                    if ": " in today_hours:
+                        today_hours = today_hours.split(": ", 1)[1]
+            except Exception:
+                pass
+    
+    # Fallback to regular opening_hours if current_opening_hours didn't work
+    if today_hours == "Hours not available":
+        opening_hours = contact_info.get("opening_hours")
+        if opening_hours and isinstance(opening_hours, dict):
+            weekday_text = opening_hours.get("weekday_text", [])
+            if weekday_text:
+                try:
+                    import datetime
+                    today_index = datetime.datetime.now().weekday()  # 0=Monday, 1=Tuesday, ..., 6=Sunday
+                    # Google's weekday_text format: [Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday]
+                    # So we can use today_index directly
+                    if 0 <= today_index < len(weekday_text):
+                        today_hours = weekday_text[today_index]
+                        if ": " in today_hours:
+                            today_hours = today_hours.split(": ", 1)[1]
+                except Exception:
+                    pass
+    
+    # Return structured contact info
+    response_data = {
+        "name": contact_info.get("name"),
+        "phone": contact_info.get("phone"),
+        "website": contact_info.get("website"),
+        "today_hours": today_hours,
+        "weekly_hours": get_weekly_hours(contact_info),
+        "rating": contact_info.get("rating"),
+        "user_ratings_total": contact_info.get("user_ratings_total"),
+        "cached_at": contact_info.get("cached_at"),
+        "place_id": place_id
+    }
+    
+    return JsonResponse(response_data)
+
 
 @require_GET
 def restaurant_recommendations(request):

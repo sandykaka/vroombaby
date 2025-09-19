@@ -77,16 +77,76 @@ class Command(BaseCommand):
         out_dir = Path(options["out_dir"]) if options.get("out_dir") else (default_base / place_id)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1) Resolve Google Maps canonical URL (no need for business types anymore)
-        gmaps = GoogleMapsClient(key=settings.GOOGLE_API_KEY)
-        try:
-            resp = gmaps.place(place_id=place_id, fields=["url"])
-            place_url = resp["result"]["url"]
-        except Exception as e:
-            if "NOT_FOUND" in str(e):
-                self.stderr.write("❌ Place ID invalid, aborting.")
-                return
-            raise
+        # 1) Get contact info first (with caching)
+        contact_file = out_dir / "contact_info.json"
+        contact_info = None
+        
+        # Check if contact info exists and is fresh (< 30 days)
+        if contact_file.exists():
+            try:
+                with open(contact_file, 'r', encoding='utf-8') as f:
+                    cached_contact = json.load(f)
+                    cached_time = pd.to_datetime(cached_contact.get('cached_at', '1970-01-01'))
+                    age_days = (pd.Timestamp.now() - cached_time).days
+                    
+                    if age_days < 30:  # Contact info is fresh
+                        contact_info = cached_contact
+                        logger.info(f"Using cached contact info for {place_id} (age: {age_days} days)")
+                    else:
+                        logger.info(f"Contact info stale for {place_id} (age: {age_days} days), refreshing")
+            except Exception as e:
+                logger.warning(f"Error reading cached contact info: {e}")
+        
+        # Fetch contact info if not cached or stale
+        if not contact_info:
+            gmaps = GoogleMapsClient(key=settings.GOOGLE_API_KEY)
+            try:
+                resp = gmaps.place(place_id=place_id, fields=[
+                    "url", "name", "formatted_phone_number", "website", 
+                    "opening_hours", "current_opening_hours", "rating", "user_ratings_total"
+                ])
+                place_data = resp["result"]
+                
+                # Extract and structure contact info
+                contact_info = {
+                    "name": place_data.get("name"),
+                    "phone": place_data.get("formatted_phone_number"),
+                    "website": place_data.get("website"),
+                    "rating": place_data.get("rating"),
+                    "user_ratings_total": place_data.get("user_ratings_total"),
+                    "current_opening_hours": place_data.get("current_opening_hours"),
+                    "opening_hours": place_data.get("opening_hours"),
+                    "cached_at": pd.Timestamp.now().isoformat(),
+                    "place_url": place_data.get("url")
+                }
+                
+                # Save contact info to file
+                with open(contact_file, 'w', encoding='utf-8') as f:
+                    json.dump(contact_info, f, indent=2, ensure_ascii=False)
+                
+                logger.info(f"Cached fresh contact info for {place_id}")
+                
+            except Exception as e:
+                if "NOT_FOUND" in str(e):
+                    self.stderr.write("❌ Place ID invalid, aborting.")
+                    return
+                logger.error(f"Error fetching contact info: {e}")
+                # Continue with review scraping even if contact info fails
+                contact_info = {"error": str(e), "cached_at": pd.Timestamp.now().isoformat()}
+        
+        # Get place URL for review scraping
+        place_url = contact_info.get("place_url")
+        if not place_url:
+            # Fallback: make minimal API call just for URL
+            gmaps = GoogleMapsClient(key=settings.GOOGLE_API_KEY)
+            try:
+                resp = gmaps.place(place_id=place_id, fields=["url"])
+                place_url = resp["result"]["url"]
+            except Exception as e:
+                if "NOT_FOUND" in str(e):
+                    self.stderr.write("❌ Place ID invalid, aborting.")
+                    return
+                raise
 
         # 2) Canonicalize: force English and pin to ?cid=… if present
         p = urlparse(place_url)

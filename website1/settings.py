@@ -198,6 +198,7 @@ LOGGING = {
         'file': {
             'class': 'logging.handlers.RotatingFileHandler',
             'filename': '/home/ubuntu/vroombaby/logs/django_error.log',
+            # 'filename': '/Users/sandeshkakade/gitRepos/vroombaby/logs/django_error.log',
             'maxBytes': 10 * 1024 * 1024,  # 10MB
             'backupCount': 5,
             'formatter': 'verbose',
@@ -205,6 +206,7 @@ LOGGING = {
         'file_debug': {
             'class': 'logging.handlers.RotatingFileHandler',
             'filename': '/home/ubuntu/vroombaby/logs/django_debug.log',
+            # 'filename': '/Users/sandeshkakade/gitRepos/vroombaby/logs/django_debug.log',
             'maxBytes': 10 * 1024 * 1024,  # 10MB
             'backupCount': 3,
             'formatter': 'simple',
