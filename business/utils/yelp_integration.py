@@ -129,10 +129,10 @@ def test_yelp_integration(place_id):
         print(f"Location: {result['google_info']['location']}")
         print(f"Generated Yelp URL: {result['yelp_url']}")
         print(f"✅ URL Generated Successfully")
-        print("📝 Note: Use this URL with Playwright for scraping (Yelp blocks direct HTTP requests)")
+        logger.info("Note: Use this URL with Playwright for scraping (Yelp blocks direct HTTP requests)")
         return result
     else:
-        print("❌ Failed to generate Yelp URL")
+        logger.warning("Failed to generate Yelp URL")
         return None
 
 
@@ -213,27 +213,27 @@ async def scrape_yelp_reviews(
             page = await context.new_page()
             
             # First visit Yelp homepage to establish session
-            print("🏠 Visiting Yelp homepage first...")
+            logger.debug("Visiting Yelp homepage first...")
             try:
                 await page.goto("https://www.yelp.com", wait_until="domcontentloaded", timeout=10000)
                 await page.wait_for_timeout(2000)
-                print("✅ Yelp homepage loaded")
+                logger.debug("Yelp homepage loaded")
             except Exception as e:
-                print(f"⚠️  Homepage load issue: {e}")
+                logger.warning(f"Homepage load issue: {e}")
             
             # Add human-like delay before navigating to restaurant
             import random
             delay = random.uniform(2, 4)
-            print(f"⏱️  Waiting {delay:.1f}s before visiting restaurant...")
+            logger.debug(f"Waiting {delay:.1f}s before visiting restaurant...")
             await page.wait_for_timeout(int(delay * 1000))
             
             # Navigate to Yelp business page with more forgiving wait condition
-            print("🌐 Navigating to restaurant page...")
+            logger.debug("Navigating to restaurant page...")
             try:
                 await page.goto(yelp_url, wait_until="domcontentloaded", timeout=15000)
             except:
                 # Fallback: try with even less strict waiting
-                print("⚠️  Retrying with basic load...")
+                logger.debug("Retrying with basic load...")
                 await page.goto(yelp_url, wait_until="load", timeout=10000)
             
             # Wait for page to stabilize
@@ -242,18 +242,18 @@ async def scrape_yelp_reviews(
             # Check if page actually loaded by looking for Yelp content
             yelp_logo = await page.locator('[alt*="Yelp"], .logo, [data-testid*="logo"]').count()
             if yelp_logo == 0:
-                print("⚠️  Page may not have loaded properly")
+                logger.warning("Page may not have loaded properly")
             else:
-                print("✅ Yelp page loaded successfully")
+                logger.debug("Yelp page loaded successfully")
             
             # Add human-like delay
             import random
             delay = random.uniform(3, 6)
-            print(f"⏱️  Waiting {delay:.1f}s (human-like behavior)")
+            logger.debug(f"Waiting {delay:.1f}s (human-like behavior)")
             await page.wait_for_timeout(int(delay * 1000))
             
             # Navigate to reviews section if not already there
-            print("🔍 Looking for reviews section...")
+            logger.debug("Looking for reviews section...")
             
             # Try to click "Reviews" tab/link
             reviews_link_selectors = [
@@ -267,13 +267,13 @@ async def scrape_yelp_reviews(
             for selector in reviews_link_selectors:
                 reviews_link = page.locator(selector)
                 if await reviews_link.count() > 0:
-                    print(f"✅ Found reviews link: {selector}")
+                    logger.debug(f"Found reviews link: {selector}")
                     await reviews_link.first.click()
                     await page.wait_for_timeout(3000)
                     break
             else:
                 # If no reviews link found, try scrolling down to reviews section
-                print("🔄 Scrolling to find reviews...")
+                logger.debug("Scrolling to find reviews...")
                 for _ in range(3):
                     await page.evaluate("window.scrollBy(0, 800)")
                     await page.wait_for_timeout(1000)
@@ -320,13 +320,13 @@ async def scrape_yelp_reviews(
                             
                         review_locators = test_locators
                         review_count = count
-                        print(f"✅ Found {count} review elements")
+                        logger.debug(f"Found {count} review elements")
                         logger.info(f"Found {count} review elements using selector")
                         break
                 
                 if review_count == 0:
                     # Debug: let's see what's actually on the page
-                    print("🔍 DEBUG: Looking for any review-like content...")
+                    logger.debug("Looking for any review-like content...")
                     
                     # Save screenshot and HTML for debugging
                     debug_dir = out_dir / "debug"
@@ -335,16 +335,16 @@ async def scrape_yelp_reviews(
                     await page.screenshot(path=str(debug_dir / "page_screenshot.png"))
                     page_html = await page.content()
                     (debug_dir / "page_source.html").write_text(page_html, encoding="utf-8")
-                    print(f"📁 Saved debug files to: {debug_dir}")
+                    logger.debug(f"Saved debug files to: {debug_dir}")
                     
                     # Check page content
                     if 'review' in page_html.lower():
-                        print("✅ Found 'review' text in page")
+                        logger.debug("Found 'review' text in page")
                         # Count occurrences
                         review_count_in_html = page_html.lower().count('review')
-                        print(f"📊 Found {review_count_in_html} mentions of 'review' in HTML")
+                        logger.debug(f"Found {review_count_in_html} mentions of 'review' in HTML")
                     else:
-                        print("❌ No 'review' text found in page")
+                        logger.debug("No 'review' text found in page")
                     
                     # Check for common Yelp content
                     yelp_indicators = ['yelp', 'star', 'rating', 'comment', 'user']
@@ -369,10 +369,10 @@ async def scrape_yelp_reviews(
                         if debug_count > 0:
                             print(f"🔍 Found {debug_count} elements with: {debug_sel}")
                     
-                    print("❌ No reviews found - breaking")
+                    logger.debug("No reviews found - breaking")
                     break
                 
-                print(f"📄 Found {review_count} review containers on page")
+                logger.debug(f"Found {review_count} review containers on page")
                 
                 new_reviews_this_batch = 0
                 max_elements_per_page = 20  # Limit processing per page
@@ -420,12 +420,12 @@ async def scrape_yelp_reviews(
                 logger.info(f"Processed page {pages_processed}/{max_pages} - Found {new_reviews_this_batch} new reviews")
                 
                 if new_reviews_this_batch == 0:
-                    print("🔄 No new reviews found, trying to load more...")
+                    logger.debug("No new reviews found, trying to load more...")
                     
                 # Try to load more reviews
                 try:
                     # Scroll down more aggressively
-                    print("📜 Scrolling to load more reviews...")
+                    logger.debug("Scrolling to load more reviews...")
                     await page.evaluate("window.scrollBy(0, 1000)")
                     await page.wait_for_timeout(2000)
                     
@@ -447,11 +447,11 @@ async def scrape_yelp_reviews(
                         await page.wait_for_timeout(3000)
                         continue
                     
-                    print("🛑 No more reviews to load")
+                    logger.debug("No more reviews to load")
                     break
                     
                 except Exception as e:
-                    print(f"⚠️  Error loading more reviews: {e}")
+                    logger.warning(f"Error loading more reviews: {e}")
                     break
             
             # Save reviews to main reviews.json
@@ -460,7 +460,7 @@ async def scrape_yelp_reviews(
             logger.info(f"Saved {len(reviews)} total reviews to {reviews_file}")
             
         except Exception as e:
-            print(f"❌ Scraping error: {e}")
+            logger.error(f"Scraping error: {e}")
             logger.error(f"Scraping error: {e}")
             
         finally:
@@ -941,8 +941,8 @@ def scrape_yelp_from_place_id(place_id: str, target_reviews: int = 50, fast: boo
     if fast:
         target_reviews = min(target_reviews, 25)
     
-    print(f"🚀 Starting Yelp scraping for: {restaurant_name}")
-    print(f"🔗 Yelp URL: {yelp_url}")
+    logger.info(f"Starting Yelp scraping for: {restaurant_name}")
+    logger.info(f"Yelp URL: {yelp_url}")
     
     # Run async scraping
     reviews = asyncio.run(scrape_yelp_reviews(yelp_url, place_id, target_reviews, out_dir, fast))

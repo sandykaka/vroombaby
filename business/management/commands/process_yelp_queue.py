@@ -5,13 +5,14 @@ Processes place_ids from the queue and scrapes Yelp reviews
 
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
+# Configure logger for cleaner cron output
 logger = logging.getLogger(__name__)
-
 
 class Command(BaseCommand):
     help = "Process pending place_ids for Yelp review scraping (run nightly)"
@@ -34,21 +35,29 @@ class Command(BaseCommand):
             action="store_true",
             help="Show what would be processed without actually doing it"
         )
+        parser.add_argument(
+            "--verbose",
+            action="store_true",
+            help="Show detailed processing messages"
+        )
 
     def handle(self, *args, **options):
         max_places = options["max_places"]
         target_reviews = options["target_reviews"]
         dry_run = options["dry_run"]
+        verbose = options["verbose"]
+        
+        # Set log level based on verbose flag
+        if not verbose:
+            # Suppress verbose scraping logs for cleaner cron output
+            logging.getLogger('business.utils.yelp_integration').setLevel(logging.WARNING)
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         if dry_run:
-            self.stdout.write(self.style.WARNING("🧪 DRY RUN MODE - No actual processing"))
+            self.stdout.write(f"[{timestamp}] 🧪 DRY RUN MODE - No actual processing")
         
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"🌙 Starting nightly Yelp processing (max: {max_places} places, "
-                f"target: {target_reviews} reviews each)"
-            )
-        )
+        self.stdout.write(f"[{timestamp}] 🌙 Starting nightly Yelp processing (max: {max_places} places, target: {target_reviews} reviews each)")
         
         try:
             from business.utils.yelp_queue import (
@@ -59,37 +68,35 @@ class Command(BaseCommand):
             )
             from business.utils.yelp_integration import scrape_yelp_from_place_id
         except ImportError as e:
-            self.stdout.write(
-                self.style.ERROR(f"❌ Failed to import required modules: {e}")
-            )
+            self.stdout.write(f"[{timestamp}] ❌ Failed to import required modules: {e}")
             return
         
         # Show queue stats
         stats = get_queue_stats()
-        self.stdout.write(
-            f"📊 Queue stats: {stats['pending_count']} pending, "
-            f"{stats['processed_last_24h']} processed in last 24h"
-        )
+        self.stdout.write(f"[{timestamp}] 📊 Queue stats: {stats['pending_count']} pending, {stats['processed_last_24h']} processed in last 24h")
         
         # Get pending place_ids
         pending_place_ids = get_pending_place_ids()
         
         if not pending_place_ids:
-            self.stdout.write(self.style.SUCCESS("✅ No pending place_ids to process"))
+            self.stdout.write(f"[{timestamp}] ✅ No pending place_ids to process")
             return
         
         # Process up to max_places
         to_process = pending_place_ids[:max_places]
-        self.stdout.write(f"🎯 Processing {len(to_process)} place_ids: {to_process}")
+        self.stdout.write(f"[{timestamp}] 🎯 Processing {len(to_process)} place_ids: {to_process}")
         
         processed_count = 0
         failed_count = 0
         
         for place_id in to_process:
-            self.stdout.write(f"\n🏪 Processing place_id: {place_id}")
+            place_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            if verbose:
+                self.stdout.write(f"[{place_timestamp}] 🏪 Processing place_id: {place_id}")
             
             if dry_run:
-                self.stdout.write(f"   🧪 Would scrape Yelp for {place_id}")
+                self.stdout.write(f"[{place_timestamp}] 🧪 Would scrape Yelp for {place_id}")
                 continue
             
             try:
@@ -103,11 +110,7 @@ class Command(BaseCommand):
                     review_count = len(result['reviews'])
                     restaurant_name = result.get('restaurant_name', 'Unknown')
                     
-                    self.stdout.write(
-                        self.style.SUCCESS(
-                            f"   ✅ Scraped {review_count} reviews for {restaurant_name}"
-                        )
-                    )
+                    self.stdout.write(f"[{place_timestamp}] ✅ Scraped {review_count} reviews for {restaurant_name}")
                     processed_count += 1
                     
                     # Mark as processed and remove from queue
@@ -115,17 +118,13 @@ class Command(BaseCommand):
                     remove_from_pending_queue(place_id)
                     
                 else:
-                    self.stdout.write(
-                        self.style.WARNING(f"   ⚠️ No reviews found for {place_id}")
-                    )
+                    self.stdout.write(f"[{place_timestamp}] ⚠️ No reviews found for {place_id}")
                     # Still remove from queue to avoid infinite retries
                     remove_from_pending_queue(place_id)
                     failed_count += 1
                 
             except Exception as e:
-                self.stdout.write(
-                    self.style.ERROR(f"   ❌ Failed to process {place_id}: {e}")
-                )
+                self.stdout.write(f"[{place_timestamp}] ❌ Failed to process {place_id}: {e}")
                 # Remove from queue to avoid infinite retries
                 remove_from_pending_queue(place_id)
                 failed_count += 1
@@ -136,14 +135,8 @@ class Command(BaseCommand):
                 time.sleep(2)
         
         # Final summary
+        final_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if not dry_run:
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"\n🎉 Nightly Yelp processing complete: "
-                    f"{processed_count} successful, {failed_count} failed"
-                )
-            )
+            self.stdout.write(f"[{final_timestamp}] 🎉 Nightly Yelp processing complete: {processed_count} successful, {failed_count} failed")
         else:
-            self.stdout.write(
-                self.style.WARNING(f"\n🧪 DRY RUN complete - would have processed {len(to_process)} places")
-            )
+            self.stdout.write(f"[{final_timestamp}] 🧪 DRY RUN complete - would have processed {len(to_process)} places")
