@@ -3507,11 +3507,11 @@ def _extract_quick_actions(ai_response, user_profile, user_message, location=Non
     # ===================================================================
 
     # Address is confirmed ONLY if:
-    # 1. User has saved addresses AND confirmed them ("yes", "deliver there")
+    # 1. User has saved addresses AND confirmed them ("yes", "deliver there", "confirmed")
     # 2. User selected "pickup" (no address needed)
     has_saved_address = user_profile and user_profile.get('saved_addresses')
     confirmed_saved_address = has_saved_address and any(phrase in user_lower for phrase in [
-        'yes', 'deliver there', 'yes deliver'
+        'yes', 'deliver there', 'yes deliver', 'confirmed', 'confirm'
     ])
     selected_pickup = any(phrase in user_lower for phrase in ['pick up', 'pickup'])
 
