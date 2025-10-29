@@ -3911,6 +3911,10 @@ def _filter_restaurants_for_response(nearby_restaurants, user_message, ai_respon
     if any(phrase in ai_lower for phrase in ['delivery or pickup', 'pickup or delivery', 'would you prefer']):
         return []  # Wait for user to answer
 
+    # Check if AI is asking for address (don't show restaurants yet)
+    if any(phrase in ai_lower for phrase in ['provide your delivery address', 'enter your address', 'delivery address']):
+        return []  # Wait for user to provide address
+
     # Check if AI is asking for address confirmation (don't show restaurants yet)
     if 'deliver to' in ai_lower and '?' in ai_response:
         return []  # Wait for user to confirm address
