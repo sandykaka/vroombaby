@@ -85,7 +85,7 @@ class Command(BaseCommand):
         # 1) Get contact info first (with caching)
         contact_file = out_dir / "contact_info.json"
         contact_info = None
-        
+
         # Check if contact info exists and is fresh (< 30 days)
         if contact_file.exists():
             try:
@@ -93,7 +93,7 @@ class Command(BaseCommand):
                     cached_contact = json.load(f)
                     cached_time = pd.to_datetime(cached_contact.get('cached_at', '1970-01-01'))
                     age_days = (pd.Timestamp.now() - cached_time).days
-                    
+
                     if age_days < 30:  # Contact info is fresh
                         contact_info = cached_contact
                         logger.info(f"Using cached contact info for {place_id} (age: {age_days} days)")
@@ -101,17 +101,17 @@ class Command(BaseCommand):
                         logger.info(f"Contact info stale for {place_id} (age: {age_days} days), refreshing")
             except Exception as e:
                 logger.warning(f"Error reading cached contact info: {e}")
-        
+
         # Fetch contact info if not cached or stale
         if not contact_info:
             gmaps = GoogleMapsClient(key=settings.GOOGLE_API_KEY)
             try:
                 resp = gmaps.place(place_id=place_id, fields=[
-                    "url", "name", "formatted_phone_number", "website", 
+                    "url", "name", "formatted_phone_number", "website",
                     "opening_hours", "current_opening_hours", "rating", "user_ratings_total"
                 ])
                 place_data = resp["result"]
-                
+
                 # Extract and structure contact info
                 contact_info = {
                     "name": place_data.get("name"),
@@ -124,13 +124,13 @@ class Command(BaseCommand):
                     "cached_at": pd.Timestamp.now().isoformat(),
                     "place_url": place_data.get("url")
                 }
-                
+
                 # Save contact info to file
                 with open(contact_file, 'w', encoding='utf-8') as f:
                     json.dump(contact_info, f, indent=2, ensure_ascii=False)
-                
+
                 logger.info(f"Cached fresh contact info for {place_id}")
-                
+
             except Exception as e:
                 if "NOT_FOUND" in str(e):
                     self.stderr.write("❌ Place ID invalid, aborting.")
@@ -138,7 +138,7 @@ class Command(BaseCommand):
                 logger.error(f"Error fetching contact info: {e}")
                 # Continue with review scraping even if contact info fails
                 contact_info = {"error": str(e), "cached_at": pd.Timestamp.now().isoformat()}
-        
+
         # Get place URL for review scraping
         place_url = contact_info.get("place_url")
         if not place_url:
@@ -215,29 +215,29 @@ def smart_normalize_dish(text: str) -> str:
     """
     if not text:
         return ""
-    
+
     t = text.strip()
-    
+
     # Handle common abbreviations and symbols
     t = re.sub(r'\b&\b', ' and ', t)  # & -> and
     t = re.sub(r'\bn\b', ' and ', t)  # n -> and (in context like "mac n cheese")
-    t = re.sub(r'\bn\'\b', ' and ', t)  # n' -> and 
-    
+    t = re.sub(r'\bn\'\b', ' and ', t)  # n' -> and
+
     # Handle "the" prefix (case insensitive)
     t = re.sub(r'^the\s+', '', t, flags=re.I)
-    
+
     # Handle common misspellings
     misspellings = {
         r'\bcappucino\b': 'cappuccino',
-        r'\bexpresso\b': 'espresso', 
+        r'\bexpresso\b': 'espresso',
         r'\bmocha\b': 'mocha',
     }
     for wrong, right in misspellings.items():
         t = re.sub(wrong, right, t, flags=re.I)
-    
+
     # Clean up extra whitespace
     t = re.sub(r'\s+', ' ', t).strip()
-    
+
     # Title case for display
     return t.title() if t else ""
 
@@ -338,6 +338,7 @@ def _match_dishes_to_menu(out_dir: Path):
         # Load menu structure
         menu_file = out_dir / "menu_structure.json"
         if not menu_file.exists():
+            print(f"⚠️  No menu structure found, skipping dish matching")
             return
 
         with open(menu_file, 'r', encoding='utf-8') as f:
@@ -345,15 +346,18 @@ def _match_dishes_to_menu(out_dir: Path):
 
         menu_items = menu_data.get('items', [])
         if not menu_items:
+            print(f"⚠️  Menu has no items, skipping dish matching")
             return
 
         # Load dish mentions
         dish_csv = out_dir / "dish_mentions.csv"
         if not dish_csv.exists():
+            print(f"⚠️  No dish_mentions.csv found, skipping dish matching")
             return
 
         # Check if file is empty (no dish mentions found)
         if dish_csv.stat().st_size == 0:
+            print(f"⚠️  No dish mentions to match (empty CSV)")
             return
 
         df = pd.read_csv(dish_csv, dtype=str)
@@ -393,6 +397,7 @@ def _match_dishes_to_menu(out_dir: Path):
                 }
 
         if not price_map:
+            print(f"⚠️  No dishes matched to menu - keeping all review dishes without prices")
             return
 
         # Create reverse map: matched_name -> data (for after we update dish names)
@@ -418,13 +423,16 @@ def _match_dishes_to_menu(out_dir: Path):
 
         matched_count = len(price_map)
         total_count = len(df)
+        print(f"✅ Matched {matched_count}/{total_count} dishes to menu (updated names + added prices/descriptions)")
 
         # Log per-ethnicity stats
         for ethnicity in df['ethnicity_ui'].unique():
             eth_dishes = df[df['ethnicity_ui'] == ethnicity]
             eth_with_price = eth_dishes[eth_dishes['price'] != '']
+            print(f"   {ethnicity}: {len(eth_with_price)}/{len(eth_dishes)} dishes have prices")
 
     except Exception as e:
+        print(f"⚠️  Error matching dishes to menu: {e}")
         traceback.print_exc()
 
 
@@ -518,10 +526,11 @@ def _aggregate_now(out_dir: Path, label: str = "", category: str = "restaurant")
         # authors (incremental if your helper supports it)
         authors_csv_path = write_or_update_authors_csv(reviews_json, authors_csv)
 
+        print(f"📊 Processing place as category: {category} (unified dish extraction)")
 
         # Always use dish_lexicon.csv - it covers food, drinks, and other items
         lexicon_csv_path = get_lexicon_path_for_category(out_dir, "restaurant")
-        
+
         # Always use same file naming structure
         out_csv = str(out_dir / "dish_mentions.csv")
         save_raw_csv = str(out_dir / "dish_mentions_raw.csv")
@@ -538,8 +547,10 @@ def _aggregate_now(out_dir: Path, label: str = "", category: str = "restaurant")
             limit_per_ethnicity=5,
             out_csv_topk=out_csv_topk,
         )
-        
+        print(f"🟢 aggregated recommendations ({label}) → {out_csv}")
+
     except Exception as e:
+        print(f"⚠️ aggregate failed ({label}): {e}")
 
 
 async def extract_menu_from_page(page, page_url: str) -> Optional[Dict]:
@@ -551,37 +562,47 @@ async def extract_menu_from_page(page, page_url: str) -> Optional[Dict]:
     """
     try:
         # Scroll to load menu content (slower for lazy-loaded items)
+        print(f"📜 Scrolling to load menu...")
         for i in range(15):  # More scrolls to load all lazy content
             await page.mouse.wheel(0, 2500)
             await page.wait_for_timeout(1500)  # Longer wait for lazy loading
             if i % 3 == 0:
+                print(f"   📜 Scroll {i+1}/15...")
 
         # Final wait for last batch of items to load
         await page.wait_for_timeout(3000)
+        print(f"✅ Scrolling complete, extracting HTML...")
 
         html_content = await page.content()
+        print(f"✅ Extracted HTML, size: {len(html_content)} bytes")
 
         # Clean HTML to reduce token usage
         html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
         html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
         html_content = re.sub(r'<!--.*?-->', '', html_content, flags=re.DOTALL)
         html_content = re.sub(r'\s+style="[^"]*"', '', html_content, flags=re.IGNORECASE)
+        print(f"✅ Cleaned HTML, size: {len(html_content)} bytes")
 
         # Debug: Save cleaned HTML for inspection (DoorDash only)
         if 'doordash.com' in page_url.lower() and len(html_content) < 5000:
+            print(f"⚠️  SMALL HTML DETECTED - saving for debug...")
             debug_file = Path("/tmp/doordash_menu_debug.html")
             debug_file.write_text(html_content, encoding='utf-8')
+            print(f"   Debug HTML saved to: {debug_file}")
 
         # Verify menu content is present
         menu_indicators = ['price', '$', 'menu', 'item', 'add to cart', 'description']
         has_menu = any(indicator in html_content.lower() for indicator in menu_indicators)
         if not has_menu:
+            print(f"⚠️  WARNING: HTML does not seem to contain menu content!")
+            print(f"   First 500 chars: {html_content[:500]}")
             return None
 
         # Truncate if needed
         max_html_length = 90000
         if len(html_content) > max_html_length:
             html_content = html_content[:max_html_length]
+            print(f"⚠️  Truncated HTML to {max_html_length} chars")
 
         # Build AI prompt
         prompt = f'''You are analyzing a restaurant's online ordering page.
@@ -619,6 +640,8 @@ HTML content:
 
         # Call OpenAI API
         client = OpenAI()
+        print(f"🤖 Calling OpenAI API (gpt-4o-mini) for menu extraction...")
+        print(f"   Input: ~{len(prompt):,} chars (~{len(prompt)//4:,} tokens)")
 
         start_time = time.time()
         response = client.chat.completions.create(
@@ -637,6 +660,9 @@ HTML content:
         output_cost = (output_tokens / 1_000_000) * 0.60
         total_cost = input_cost + output_cost
 
+        print(f"✅ OpenAI API call complete ({elapsed:.1f}s)")
+        print(f"   Tokens: {input_tokens:,} in + {output_tokens:,} out = {total_tokens:,} total")
+        print(f"   Cost: ${total_cost:.4f} (${input_cost:.4f} in + ${output_cost:.4f} out)")
 
         # Parse response
         response_text = response.choices[0].message.content.strip()
@@ -646,12 +672,16 @@ HTML content:
         if json_start >= 0 and json_end > json_start:
             json_text = response_text[json_start:json_end]
             menu_data = json.loads(json_text)
+            print(f"✅ Successfully extracted {len(menu_data.get('items', []))} items from menu")
             items_with_prices = sum(1 for item in menu_data.get('items', []) if item.get('price'))
+            print(f"   Pricing data: {items_with_prices}/{len(menu_data.get('items', []))} items have prices")
             return menu_data
         else:
+            print(f"❌ No valid JSON found in GPT response")
             return None
 
     except Exception as e:
+        print(f"⚠️  Menu extraction failed: {e}")
         traceback.print_exc()
         return None
 
@@ -719,6 +749,7 @@ async def scrape_reviews(
             # Navigate main page to place_url FIRST (stays here for review scraping later)
             await page.goto(place_url, wait_until='domcontentloaded')
             await page.wait_for_timeout(2000)
+            print(f"✅ Main page loaded at {place_url}")
 
             # ---------- EXTRACT MENU (in separate tabs) ----------
             # Only extract menu if not already cached (skip on FULL job if menu exists)
@@ -726,6 +757,7 @@ async def scrape_reviews(
             skip_menu = menu_file.exists()
 
             if skip_menu:
+                print(f"✅ Menu already cached, skipping menu extraction")
 
             if not skip_menu:
                 # Create a SEPARATE page for menu extraction so main page stays completely clean
@@ -744,6 +776,7 @@ async def scrape_reviews(
 
                     # Try to extract menu from ordering URL
                     try:
+                        print(f"📋 Extracting menu structure for {place_id}...")
 
                         # Look for "Order online" button on menu_page
                         order_button = None
@@ -761,6 +794,7 @@ async def scrape_reviews(
                                     try:
                                         await button.wait_for(state="visible", timeout=3000)
                                         order_button = button
+                                        print(f"✅ Found 'Order online' button")
                                         break
                                     except:
                                         continue
@@ -769,6 +803,7 @@ async def scrape_reviews(
 
                         if order_button:
                             # Click to open ordering page in new tab
+                            print(f"🖱️  Clicking 'Order online' button...")
                             current_pages = len(context.pages)
                             await order_button.click()
                             await menu_page.wait_for_timeout(2000)
@@ -780,6 +815,7 @@ async def scrape_reviews(
                                 ordering_page = new_pages[-1]
                                 await ordering_page.wait_for_load_state('networkidle', timeout=10000)
                                 ordering_url = ordering_page.url
+                                print(f"🔗 Initial ordering page URL: {ordering_url}")
 
                                 # Initialize URLs
                                 ordering_url_pickup = None
@@ -791,12 +827,14 @@ async def scrape_reviews(
 
                                 # Check if this is Google's provider chooser page
                                 if 'google.com/viewer/chooseprovider' in ordering_url:
+                                    print(f"⚠️  Google chooser page detected - will extract pickup and delivery URLs...")
 
                                     # Wait for chooser page to be ready
                                     await ordering_page.wait_for_timeout(3000)
 
                                     # FIRST: Duplicate tab to get delivery URL
                                     try:
+                                        print(f"🔍 Step 1: Getting delivery URL...")
                                         delivery_page = await context.new_page()
                                         await delivery_page.goto(ordering_url, timeout=10000)
                                         await delivery_page.wait_for_load_state('networkidle', timeout=10000)
@@ -832,7 +870,9 @@ async def scrape_reviews(
 
                                                                 # Must be short text (just "Delivery", not a long description)
                                                                 if len(text) < 20:
+                                                                    print(f"   🎯 Found delivery element: '{text}' using {selector}")
                                                                     await btn.click(timeout=3000)
+                                                                    print(f"   ✓ Clicked 'Delivery' button")
                                                                     # Wait for page to update after clicking delivery
                                                                     await delivery_page.wait_for_timeout(2000)
                                                                     delivery_clicked = True
@@ -846,8 +886,10 @@ async def scrape_reviews(
                                                 continue
 
                                         if not delivery_clicked:
+                                            print(f"   ⚠️  No delivery button found, skipping delivery URL")
                                         else:
                                             # Now re-query for platform links AFTER clicking delivery
+                                            print(f"   🔍 Looking for platform links after clicking delivery...")
                                             await delivery_page.wait_for_timeout(1000)
                                             all_elements = await delivery_page.locator('a:visible, button:visible').all()
 
@@ -873,6 +915,7 @@ async def scrape_reviews(
                                                     if "preferred by business" in text.lower():
                                                         platform_element = el
                                                         platform_text = text
+                                                        print(f"   ✅ Found preferred platform: {platform_text}")
                                                         break
 
                                                 # If not found, look for Uber Eats (easier to automate than DoorDash)
@@ -881,15 +924,18 @@ async def scrape_reviews(
                                                         if "uber" in text.lower():
                                                             platform_element = el
                                                             platform_text = text
+                                                            print(f"   ✅ Found Uber Eats: {platform_text}")
                                                             break
 
                                                 # Fallback to first option
                                                 if not platform_element:
                                                     platform_element, platform_text = candidates[0]
+                                                    print(f"   ✅ Using first platform: {platform_text}")
 
                                             # Now click the platform element we found
                                             if platform_element:
                                                 try:
+                                                    print(f"   🖱️  Clicking platform for delivery...")
                                                     current_page_count = len(context.pages)
                                                     await platform_element.click(force=True)
                                                     await delivery_page.wait_for_timeout(3000)
@@ -903,30 +949,40 @@ async def scrape_reviews(
                                                         await delivery_page.wait_for_timeout(2000)
 
                                                     ordering_url_delivery = delivery_page.url
+                                                    print(f"   ✅ Delivery URL: {ordering_url_delivery}")
 
                                                     # If delivery is DoorDash, wait for Cloudflare then extract
                                                     if 'doordash.com' in ordering_url_delivery.lower():
+                                                        print(f"   🔍 DoorDash detected - waiting for page to fully load (Cloudflare)...")
 
                                                         # Wait for network to settle (Cloudflare check completes)
                                                         try:
                                                             await delivery_page.wait_for_load_state('networkidle', timeout=20000)
+                                                            print(f"   ✅ Page fully loaded")
                                                         except Exception:
+                                                            print(f"   ⚠️  Timeout on networkidle, proceeding anyway")
 
                                                         # Extra buffer for menu items to render
                                                         await delivery_page.wait_for_timeout(3000)
 
+                                                        print(f"   📋 Extracting menu...")
                                                         menu_data_cached = await extract_menu_from_page(delivery_page, ordering_url_delivery)
                                                         if menu_data_cached:
                                                             menu_extracted = True
+                                                            print(f"   ✅ Menu extracted from DoorDash delivery page")
 
                                                 except Exception as e:
+                                                    print(f"   ⚠️  Error clicking platform: {e}")
                                             else:
+                                                print(f"   ⚠️  Could not find platform element")
 
                                         # Close delivery tab
                                         await delivery_page.close()
                                     except Exception as e:
+                                        print(f"   ⚠️  Error getting delivery URL: {e}")
 
                                     # SECOND: Click platform on main page to get pickup URL
+                                    print(f"🔍 Step 2: Getting pickup URL...")
                                     all_elements = await ordering_page.locator('a:visible, button:visible').all()
 
                                     # Smart platform selection: Preferred by business > DoorDash > First option
@@ -951,6 +1007,7 @@ async def scrape_reviews(
                                             if "preferred by business" in text.lower():
                                                 platform_element = el
                                                 selected_platform = text
+                                                print(f"   ✅ Found preferred platform: {selected_platform}")
                                                 break
 
                                         # If not found, look for Uber Eats (easier to automate than DoorDash)
@@ -959,13 +1016,16 @@ async def scrape_reviews(
                                                 if "uber" in text.lower():
                                                     platform_element = el
                                                     selected_platform = text
+                                                    print(f"   ✅ Found Uber Eats: {selected_platform}")
                                                     break
 
                                         # Fallback to first option
                                         if not platform_element:
                                             platform_element, selected_platform = candidates[0]
+                                            print(f"   ✅ Using first platform: {selected_platform}")
 
                                     if platform_element:
+                                        print(f"   🖱️  Clicking {selected_platform} for pickup...")
                                         current_page_count = len(context.pages)
 
                                         try:
@@ -981,6 +1041,7 @@ async def scrape_reviews(
                                                 await ordering_page.wait_for_timeout(2000)
 
                                             ordering_url_pickup = ordering_page.url
+                                            print(f"   ✅ Pickup URL: {ordering_url_pickup}")
 
                                             # IMMEDIATELY save minimal menu structure (URLs only) for fast iOS access
                                             # iOS app polls for this file within 30 seconds, but full scraping takes 2+ minutes
@@ -1021,23 +1082,29 @@ async def scrape_reviews(
 
                                                 menu_file = out_dir / "menu_structure.json"
                                                 menu_file.write_text(json.dumps(minimal_menu, indent=2, ensure_ascii=False), encoding='utf-8')
+                                                print(f"💾 Saved minimal menu structure (URLs only) for fast iOS access")
                                         except Exception as e:
+                                            print(f"   ⚠️  Error clicking platform: {e}")
                                             try:
                                                 await ordering_page.close()
                                             except:
                                                 pass
                                     else:
+                                        print(f"   ❌ No ordering platform found")
                                         await ordering_page.close()
                                 else:
                                     # Not a chooser page - direct ordering URL
                                     ordering_url_pickup = ordering_url
-    
+                                    print(f"✅ Direct ordering URL (pickup): {ordering_url_pickup}")
+
                             # Only continue if we successfully got past the chooser (or weren't on one)
                             if not ordering_page.is_closed():
                                 # Extract menu only if not already extracted from delivery page
                                 if not menu_extracted:
+                                    print(f"📋 Extracting menu from pickup page...")
                                     menu_data_cached = await extract_menu_from_page(ordering_page, ordering_url_pickup or ordering_url)
                                 else:
+                                    print(f"✅ Menu already extracted from delivery page, skipping pickup extraction")
 
                                 # ALWAYS save menu structure if we have ordering URLs (even if menu extraction failed)
                                 # This enables WebView fallback when Cloudflare blocks menu scraping
@@ -1080,9 +1147,12 @@ async def scrape_reviews(
                                     menu_file.write_text(json.dumps(menu_structure, indent=2, ensure_ascii=False), encoding='utf-8')
 
                                     if menu_data_cached and menu_data_cached.get('items'):
+                                        print(f"✅ Saved complete menu structure ({len(menu_data_cached.get('items', []))} items)")
                                     else:
+                                        print(f"⚠️  Saved minimal menu structure (ordering URLs only - menu extraction failed)")
                                 elif menu_data_cached:
                                     # Edge case: Have menu data but no ordering URLs (shouldn't happen but handle it)
+                                    print(f"⚠️  Menu extracted but no ordering URLs available - skipping save")
 
                                 # Close ordering page after menu extraction
                                 try:
@@ -1090,20 +1160,25 @@ async def scrape_reviews(
                                 except:
                                     pass
                         else:
+                            print(f"⚠️  No 'Order online' button found")
 
                     except Exception as menu_ex:
+                        print(f"⚠️  Menu button click/navigation failed: {menu_ex}")
                         traceback.print_exc()
 
                 except Exception as e:
+                    print(f"⚠️  Menu extraction failed: {e}")
                     traceback.print_exc()
                 finally:
                     # Always close menu_page to free resources
                     try:
                         await menu_page.close()
+                        print(f"✅ Closed menu extraction page")
                     except Exception:
                         pass
 
             # Main page already on place_url, just re-enable request blocking for reviews
+            print(f"🔄 Preparing main page for review scraping...")
             await page.wait_for_timeout(500)  # Brief pause after menu tabs close
 
             # Re-enable request blocking for reviews
@@ -1269,6 +1344,7 @@ async def scrape_reviews(
             try:
                 _aggregate_now(out_dir, label="fast", category=category)
             except Exception as e:
+                print(f"⚠️ aggregate failed (fast): {e}")
 
         # ---------- harvest images using SAME context ----------
         if harvest_images_now:
@@ -1287,7 +1363,9 @@ async def scrape_reviews(
                 try:
                     await page2.goto(place_url, wait_until="domcontentloaded")
                     await _harvest_menu_images_on_page(page2, top_dishes, out_dir, max_scrolls=60)
+                    print(f"🖼️ harvested images for {len(top_dishes)} dishes (FAST top{top_k_images}).")
                 except Exception as e:
+                    print(f"⚠️ menu image harvest failed: {e}")
                 finally:
                     try: await page2.close()
                     except Exception: pass
@@ -1379,37 +1457,37 @@ def extract_recommended_dishes(text: str) -> List[str]:
     chunk = text[m.end():]
     stop = _RE_SECTION_STOP.search(chunk)
     if stop: chunk = chunk[:stop.start()]
-    
+
     # Limit chunk length more aggressively for cleaner extraction
     chunk = chunk.strip()[:150]  # Reduced from 300 to 150
-    
+
     parts = [p.strip() for p in _SPLIT_DISHES.split(chunk) if p.strip()]
     out, seen = [], set()
     for p in parts:
         p = re.sub(r'^[\-\u2022\u2023\u25E6\u2043\u2219"\']+\s*', "", p).strip()
         if len(p) < 2: continue
-        
+
         # Filter out noise patterns
         if _NOISE_PATTERNS.search(p):
             continue
-        
+
         # Clean up obvious nonsense like repeated letters at the end
         p = re.sub(r'\s+([a-zA-Z])\1{3,}\s*$', '', p).strip()  # Remove "mmmmm", "ahhhhh" etc at end
         if not p or len(p) < 2:
             continue
-            
+
         # Apply smart normalization
         p = smart_normalize_dish(p)
         if not p:
             continue
-            
+
         # Limit individual item length
         if len(p) > 50:  # Skip overly long items
             continue
-            
+
         # Clean up whitespace and format
         p = re.sub(r"\s+", " ", p).strip()
-        
+
         key = p.lower()
         if key not in seen:
             seen.add(key); out.append(p)
@@ -1419,18 +1497,18 @@ def get_lexicon_path_for_category(out_dir: Path, category: str = "restaurant") -
     """Get the appropriate lexicon file for the given category"""
     category_lexicons = {
         "restaurant": "dish_lexicon.csv",
-        "coffee": "drink_lexicon.csv", 
+        "coffee": "drink_lexicon.csv",
         "bar": "cocktail_lexicon.csv",
         "brunch": "brunch_lexicon.csv",
         "dessert": "dessert_lexicon.csv"
     }
-    
+
     lexicon_name = category_lexicons.get(category, "dish_lexicon.csv")
-    
+
     # Check local (place-specific) lexicon first, then global
     prefer = out_dir / lexicon_name
     fallback = Path(settings.BASE_DIR) / lexicon_name
-    
+
     return str(prefer if prefer.exists() else fallback)
 
 # ---------- LEXICON support ----------
@@ -1457,7 +1535,7 @@ def load_lexicon(lexicon_csv: Optional[str]) -> Dict[str, List[str]]:
         "Dumplings": ["dumpling", "dumplings"],
         "Fried Rice": ["fried rice"],
         "Pasta": ["pasta"],
-        
+
         # Coffee drinks
         "Latte": ["latte", "café latte", "caffe latte"],
         "Cappuccino": ["cappuccino", "cappucino", "cappuchino"],
@@ -1469,7 +1547,7 @@ def load_lexicon(lexicon_csv: Optional[str]) -> Dict[str, List[str]]:
         "Macchiato": ["macchiato", "caramel macchiato"],
         "Flat White": ["flat white"],
         "Cortado": ["cortado"],
-        
+
         # Cafe food items
         "Avocado Toast": ["avocado toast", "avo toast"],
         "Croissant": ["croissant", "butter croissant"],
@@ -1555,6 +1633,8 @@ def build_dish_mentions(
     reviews_df["ethnicity_ui"] = g.apply(lambda x: map_group_to_ui(x) if isinstance(x, str) else None)
     reviews_df["tab"] = g.apply(lambda x: map_group_to_tab(x) if isinstance(x, str) else None)
 
+    print("build_dish_mentions(): columns ->", list(reviews_df.columns))
+    print("head ->", reviews_df.head(2))
 
     # ------------ lexicon index ------------
     use_lex = mode in ("lexicon","both")
@@ -1578,7 +1658,7 @@ def build_dish_mentions(
             if not k and d.strip():
                 k = d.strip().lower()
                 label = smart_normalize_dish(d) or d.strip()
-            
+
             if k and label and k not in seen_keys_this_review:
                 seen_keys_this_review.add(k)
                 rows.append({
@@ -1618,12 +1698,14 @@ def build_dish_mentions(
     # if nothing, still produce the (empty) out_csv
     if raw.empty:
         Path(out_csv).write_text("", encoding="utf-8")
+        print(f"ℹ️ No dish mentions found (mode={mode}).")
         return raw
 
     # ------------ aggregate for UI ------------
     raw = raw[raw["tab"].isin(TAB_LABELS)]
     if raw.empty:
         Path(out_csv).write_text("", encoding="utf-8")
+        print(f"ℹ️ No dish mentions after tab filter.")
         return raw
 
     # pick a representative display per (tab, dish_key)
@@ -1661,7 +1743,9 @@ def build_dish_mentions(
         tmp["__rank"] = tmp.groupby("ethnicity_ui").cumcount()
         topk_df = tmp[tmp["__rank"] < int(limit_per_ethnicity)].drop(columns="__rank")
         topk_df.to_csv(out_csv_topk, index=False)
+        print(f"✅ dish_mentions (TOP{limit_per_ethnicity}) → {out_csv_topk}  ({len(topk_df)} rows)")
 
+    print(f"✅ dish_mentions (FULL) → {out_csv}  ({len(agg)} rows; mode={mode}; {time.time()-t0:.2f}s)")
     return agg
 
 
@@ -1817,10 +1901,12 @@ def write_or_update_authors_csv(reviews_json_path: str, authors_csv_path: str) -
                 combined.loc[mask, col] = to_enrich[col].values
 
         combined.to_csv(p, index=False)
+        print(f"✅ Updated authors.csv → {p}  ({len(combined)} authors)")
     else:
         # ✅ enrich on first create too
         new = enrich_groups_with_ethnicolr(new, prob_threshold=0.7)
         new.to_csv(p, index=False)
+        print(f"✅ Created authors.csv → {p}  ({len(new)} authors)")
 
     return str(p)
 
@@ -1839,6 +1925,7 @@ def enrich_groups_with_ethnicolr(df: pd.DataFrame, prob_threshold: float = 0.7) 
     # Only rows that need a label and have at least a first or last name
     need = df["group"].fillna("").eq("")
     if "first" not in df.columns or "last" not in df.columns:
+        print("[authors] missing first/last columns; cannot run ethnicolr")
         return df
     sub = df.loc[need, ["first", "last"]].fillna("")
     sub = sub[(sub["first"] != "") | (sub["last"] != "")]
@@ -1863,6 +1950,7 @@ def enrich_groups_with_ethnicolr(df: pd.DataFrame, prob_threshold: float = 0.7) 
             label_col = cols_lc[cand]
             break
     if label_col is None:
+        print("[authors] ethnicolr returned unexpected schema; skipping auto fill")
         return df
 
     # --- Detect probability column (single) or compute from distributed ---
@@ -1909,31 +1997,32 @@ def enrich_groups_with_ethnicolr(df: pd.DataFrame, prob_threshold: float = 0.7) 
             df["prob"] = ""
         df.loc[to_fill_idx, "prob"] = p_series.loc[to_fill_idx].round(3).astype(str).values
 
+    print(f"[authors] ethnicolr filled groups for {len(to_fill_idx)} authors (thr={prob_threshold})")
     return df
 
 
 # --- Map Ethnicolr label -> your taxonomy chain ---
 def to_chain(label: str) -> str:
-        lbl = (label or "").lower()
+    lbl = (label or "").lower()
 
-        # Handle chain-like labels Ethnicolr emits (examples seen in your logs)
-        if "indiansubcontinent" in lbl or "indian" in lbl or "southasian" in lbl:
-            return "SouthAsian,IndianSubContinent"
-        if "eastasian" in lbl or "chinese" in lbl or "japanese" in lbl or "korean" in lbl:
-            return "Asian,GreaterEastAsian,EastAsian"
-        if "italian" in lbl:
-            return "GreaterEuropean,WestEuropean,Italian"
-        if "hispanic" in lbl or "latino" in lbl:
-            return "Mexican"  # coarse bucket used by your app
-        if "greatereuropean" in lbl or "easteuropean" in lbl or "westeuropean" in lbl or lbl == "white":
-            return "GreaterEuropean"
-        if "greaterafrican" in lbl or "african" in lbl or lbl == "black":
-            return "GreaterAfrican"
+    # Handle chain-like labels Ethnicolr emits (examples seen in your logs)
+    if "indiansubcontinent" in lbl or "indian" in lbl or "southasian" in lbl:
+        return "SouthAsian,IndianSubContinent"
+    if "eastasian" in lbl or "chinese" in lbl or "japanese" in lbl or "korean" in lbl:
+        return "Asian,GreaterEastAsian,EastAsian"
+    if "italian" in lbl:
+        return "GreaterEuropean,WestEuropean,Italian"
+    if "hispanic" in lbl or "latino" in lbl:
+        return "Mexican"  # coarse bucket used by your app
+    if "greatereuropean" in lbl or "easteuropean" in lbl or "westeuropean" in lbl or lbl == "white":
+        return "GreaterEuropean"
+    if "greaterafrican" in lbl or "african" in lbl or lbl == "black":
+        return "GreaterAfrican"
 
-        # generic fallbacks
-        if lbl == "asian":
-            return "Asian,GreaterEastAsian,EastAsian"
-        return ""  # unknown/low confidence → leave blank
+    # generic fallbacks
+    if lbl == "asian":
+        return "Asian,GreaterEastAsian,EastAsian"
+    return ""  # unknown/low confidence → leave blank
 
 def _norm(s: str) -> str:
     s = (s or "").lower().replace("&", " and ")
