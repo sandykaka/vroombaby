@@ -3540,6 +3540,8 @@ def _extract_quick_actions(ai_response, user_profile, user_message, location=Non
 
     address_confirmed = confirmed_saved_address or selected_pickup
 
+    logger.info(f"🔍 ADDRESS CHECK: has_saved_address={has_saved_address}, confirmed_saved_address={confirmed_saved_address}, selected_pickup={selected_pickup}, address_confirmed={address_confirmed}")
+
     if address_confirmed and location and conversation_history:
         # Parse conversation history to find which cuisine they selected
         cuisine_keywords = {
@@ -3557,12 +3559,16 @@ def _extract_quick_actions(ai_response, user_profile, user_message, location=Non
         for msg in reversed(conversation_history):  # Check recent messages
             if msg.get('role') == 'user':
                 msg_lower = msg.get('content', '').lower()
+                logger.info(f"🔍 CHECKING MESSAGE: '{msg_lower[:50]}...' for cuisine keywords")
                 for keyword, cuisine_type in cuisine_keywords.items():
                     if keyword in msg_lower:
                         selected_cuisine = cuisine_type
+                        logger.info(f"✅ FOUND CUISINE: {cuisine_type} (keyword: {keyword})")
                         break
                 if selected_cuisine:
                     break
+
+        logger.info(f"🔍 CUISINE SEARCH RESULT: selected_cuisine={selected_cuisine}")
 
         # If we found a cuisine selection, show real dish buttons
         if selected_cuisine:
