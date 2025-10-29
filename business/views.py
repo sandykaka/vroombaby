@@ -3933,6 +3933,12 @@ def _determine_conversation_state(user_message, ai_response, user_profile):
     user_lower = user_message.lower()
     ai_lower = ai_response.lower()
 
+    # Check if we're asking user to provide delivery address
+    if any(phrase in ai_lower for phrase in ['provide your delivery address', 'enter your address', 'delivery address']):
+        # Only if user has no saved addresses
+        if not user_profile or not user_profile.get('saved_addresses'):
+            return 'collecting_address'
+
     if any(word in user_lower for word in ['hi', 'hello', 'hey']):
         return 'greeting'
 
