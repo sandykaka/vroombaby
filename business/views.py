@@ -1561,15 +1561,26 @@ def restaurant_menu_structure_api(request):
             return JsonResponse(response_data)
         else:
             # Menu not cached yet - try to provide website or Google Maps fallback URL
-            fallback_url = None
+            website_url = None
+            google_maps_url = None
             try:
                 reviews_dir = Path(settings.BASE_DIR) / "var" / "reviews" / place_id
                 contact_file = reviews_dir / "contact_info.json"
                 if contact_file.exists():
                     with open(contact_file, 'r', encoding='utf-8') as f:
                         contact_info = json.load(f)
-                        # Priority: website > place_url (Google Maps)
-                        fallback_url = contact_info.get('website') or contact_info.get('place_url')
+
+                        # Get website URL and upgrade HTTP to HTTPS
+                        raw_website = contact_info.get('website')
+                        if raw_website:
+                            # Upgrade HTTP to HTTPS for better iOS compatibility
+                            if raw_website.startswith('http://'):
+                                website_url = raw_website.replace('http://', 'https://', 1)
+                            else:
+                                website_url = raw_website
+
+                        # Get Google Maps URL as fallback
+                        google_maps_url = contact_info.get('place_url')
             except Exception:
                 pass
 
@@ -1579,9 +1590,11 @@ def restaurant_menu_structure_api(request):
                 "message": "Restaurant may not have an online menu or website"
             }
 
-            # Add website or Google Maps URL as fallback for fresh restaurants
-            if fallback_url:
-                response["google_maps_url"] = fallback_url
+            # Add website and/or Google Maps URL for fresh restaurants
+            if website_url:
+                response["website"] = website_url
+            if google_maps_url:
+                response["google_maps_url"] = google_maps_url
 
             return JsonResponse(response)
 
