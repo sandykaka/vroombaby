@@ -3422,13 +3422,28 @@ def _build_home_ai_context(user_profile, nearby_restaurants, location, conversat
         for msg in conversation_history:
             if msg.get('role') == 'user':
                 content_lower = msg.get('content', '').lower()
-                if any(word in content_lower for word in ['delivery', 'deliver', 'pickup', 'pick up', 'yes deliver']):
+
+                # User selected pickup - no address needed
+                if any(word in content_lower for word in ['pickup', 'pick up']):
                     order_type_confirmed = True
-                    context_parts.append("- ✅ ORDER TYPE CONFIRMED: User has answered delivery/pickup")
+                    context_parts.append("- ✅ ORDER TYPE CONFIRMED: User selected pickup (no address needed)")
+                    break
+
+                # User said "yes deliver" or similar - confirming saved address
+                if saved_addresses and any(phrase in content_lower for phrase in ['yes deliver', 'yes,', 'deliver there']):
+                    order_type_confirmed = True
+                    context_parts.append("- ✅ ORDER TYPE CONFIRMED: User confirmed delivery to saved address")
+                    break
+
+                # User said "delivery" but has NO saved address - NOT confirmed yet!
+                # They still need to provide an address
+                if any(word in content_lower for word in ['delivery', 'deliver']) and not saved_addresses:
+                    # Don't mark as confirmed - we still need address
+                    logger.info("⚠️ User said 'delivery' but has no saved address - need to collect address first")
                     break
 
     if not order_type_confirmed and conversation_history and len(conversation_history) > 0:
-        context_parts.append("- ⚠️ ORDER TYPE NOT CONFIRMED: Still waiting for delivery/pickup answer")
+        context_parts.append("- ⚠️ ORDER TYPE NOT CONFIRMED: Still waiting for delivery/pickup answer or address")
 
     # Location context
     if location:
