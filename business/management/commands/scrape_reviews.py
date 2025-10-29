@@ -1,11 +1,13 @@
 import gc
 import logging
 import os, csv
+import traceback
 from urllib.parse import urlparse, parse_qs
 
 from django.core.management.base import BaseCommand
 
 from googlemaps import Client as GoogleMapsClient
+from openai import OpenAI
 
 import asyncio
 from playwright.async_api import async_playwright
@@ -21,8 +23,11 @@ from django.conf import settings
 from difflib import SequenceMatcher
 from unidecode import unidecode
 import inflect
-import spacy
+# Defer heavy ML imports until needed (after menu extraction)
+# import spacy - loaded lazily in _get_nlp()
+# import ethnicolr - loaded lazily in enrich_groups_with_ethnicolr()
 from functools import lru_cache
+
 logger = logging.getLogger(__name__)
 
 CACHE_BASE = Path(settings.REVIEWS_CACHE_DIR)
@@ -165,6 +170,8 @@ class Command(BaseCommand):
             harvest_images_now=True,
             top_k_images=5,
             category=category,  # Pass category instead of business_types
+            is_fast_job=options.get("fast", False),  # Pass fast flag for menu timing
+            contact_info=contact_info,  # Pass contact info for menu extraction
         ))
 
         # Clear lock if our run created it
@@ -179,12 +186,26 @@ class Command(BaseCommand):
 # python -m spacy download en_core_web_sm
 
 
-# load lightweight spaCy pipeline (tokenizer + tagger only)
-_nlp = spacy.load("en_core_web_sm", disable=["ner","parser","lemmatizer","textcat"])
+# Note: spaCy is lazy-loaded in _get_nlp() to avoid 2-minute startup delay
 _inflect = inflect.engine()
 _SMALL = {"and","of","with","on","in","to","for","by","at"}
 
+# Words that should stay plural for better readability
+_KEEP_PLURAL = {
+    "fries", "chips", "wings", "ribs", "tacos", "nachos",
+    "beans", "peas", "greens", "tots", "bites", "strips",
+    "nuggets", "rings", "noodles", "potatoes", "vegetables",
+    "meatballs", "dumplings", "wontons", "enchiladas", "tamales"
+}
+
 def _singular(tok: str) -> str:
+    """Singularize a word, but keep certain plural food terms"""
+    tok_lower = tok.lower()
+
+    # Keep plural for common food items
+    if tok_lower in _KEEP_PLURAL:
+        return tok
+
     s = _inflect.singular_noun(tok)
     return s if isinstance(s, str) and s else tok
 
@@ -254,6 +275,11 @@ def normalize_dish_key_and_label(text: str) -> Tuple[str, str]:
             continue
 
         parts = [_singular(p) for p in s.split()]
+        # Keep plural form for food items (don't singularize the last word which is typically the main noun)
+        # This preserves "Fries", "Chips", "Wings" etc. in their natural plural form
+        if parts and len(s.split()) > 0:
+            original_parts = s.split()
+            parts[-1] = original_parts[-1]  # Keep the last word in its original form
         norm_tokens.extend(parts)
 
     key = " ".join(norm_tokens).strip()
@@ -267,15 +293,15 @@ def normalize_dish_key_and_label(text: str) -> Tuple[str, str]:
 
 # Add this helper near the top of scrape_reviews.py
 def _norm_text(s: str) -> str:
-    import re
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
 
 _nlp = None
 
 def _get_nlp():
+    """Lazy-load spacy (deferred to avoid 2-minute startup delay for menu extraction)"""
     global _nlp
     if _nlp is None:
-        import spacy
+        import spacy  # Import only when needed (after menu extraction)
         _nlp = spacy.load("en_core_web_sm", disable=["ner","parser","lemmatizer","textcat"])
     return _nlp
 
@@ -302,6 +328,184 @@ def _read_seed_reviews(out_dir: Path):
 
 
 
+def _match_dishes_to_menu(out_dir: Path):
+    """
+    Match review dishes to menu items and add prices.
+    Only keeps dishes that match menu items (orderable).
+    Maintains top 5 per ethnicity after filtering.
+    """
+    try:
+        # Load menu structure
+        menu_file = out_dir / "menu_structure.json"
+        if not menu_file.exists():
+            return
+
+        with open(menu_file, 'r', encoding='utf-8') as f:
+            menu_data = json.load(f)
+
+        menu_items = menu_data.get('items', [])
+        if not menu_items:
+            return
+
+        # Load dish mentions
+        dish_csv = out_dir / "dish_mentions.csv"
+        if not dish_csv.exists():
+            return
+
+        # Check if file is empty (no dish mentions found)
+        if dish_csv.stat().st_size == 0:
+            return
+
+        df = pd.read_csv(dish_csv, dtype=str)
+        if df.empty:
+            return
+
+        # Match each dish to menu items and build a price/description map
+        price_map = {}  # dish_name -> (price, description)
+
+        for _, row in df.iterrows():
+            review_dish = row['dish']
+
+            # Find best matching menu item
+            best_match = None
+            best_score = 0.0
+
+            for menu_item in menu_items:
+                menu_name = menu_item.get('name', '')
+                menu_category = menu_item.get('category', '')
+                if not menu_name:
+                    continue
+
+                # Calculate match score with category info
+                score = _dish_match_score(review_dish, menu_name, menu_category)
+
+                if score > best_score:
+                    best_score = score
+                    best_match = menu_item
+
+            # If good match (>= 0.35), add price/description to map (lowered threshold for better fuzzy matching)
+            if best_score >= 0.35 and best_match:
+                price_map[review_dish] = {
+                    'matched_name': best_match.get('name', ''),  # Store matched menu name
+                    'price': best_match.get('price', ''),
+                    'description': best_match.get('description', ''),
+                    'match_score': f"{best_score:.2f}"
+                }
+
+        if not price_map:
+            return
+
+        # Create reverse map: matched_name -> data (for after we update dish names)
+        matched_dish_map = {}
+        for review_dish, data in price_map.items():
+            matched_name = data.get('matched_name', review_dish)
+            matched_dish_map[matched_name] = data
+
+        # Update dish names to match menu (for ordering automation)
+        df['dish'] = df['dish'].map(lambda d: price_map.get(d, {}).get('matched_name', d))
+
+        # Add price/description columns using matched names
+        df['price'] = df['dish'].map(lambda d: matched_dish_map.get(d, {}).get('price', ''))
+        df['description'] = df['dish'].map(lambda d: matched_dish_map.get(d, {}).get('description', ''))
+        df['match_score'] = df['dish'].map(lambda d: matched_dish_map.get(d, {}).get('match_score', ''))
+
+        # Save updated CSV with ALL original dishes (but now some have prices)
+        df.to_csv(dish_csv, index=False)
+
+        # Also save top5 version
+        top5_csv = out_dir / "dish_mentions_top5.csv"
+        df.to_csv(top5_csv, index=False)
+
+        matched_count = len(price_map)
+        total_count = len(df)
+
+        # Log per-ethnicity stats
+        for ethnicity in df['ethnicity_ui'].unique():
+            eth_dishes = df[df['ethnicity_ui'] == ethnicity]
+            eth_with_price = eth_dishes[eth_dishes['price'] != '']
+
+    except Exception as e:
+        traceback.print_exc()
+
+
+def _dish_match_score(review_dish: str, menu_dish: str, menu_category: str = '') -> float:
+    """
+    Calculate match score between review dish and menu dish.
+    Uses menu category to prioritize entrees over sides when review mentions both.
+    Returns 0.0-1.0, higher is better match.
+    """
+    if not review_dish or not menu_dish:
+        return 0.0
+
+    # Normalize both
+    r = review_dish.lower().strip()
+    m = menu_dish.lower().strip()
+
+    # Remove common noise words and punctuation
+    noise_words = {'and', 'with', 'or', 'the', 'a', 'an'}
+    r_clean = ' '.join([w for w in r.replace('*', '').replace('+', '').split() if w not in noise_words])
+    m_clean = ' '.join([w for w in m.replace('*', '').replace('+', '').split() if w not in noise_words])
+
+    # Exact match
+    if r_clean == m_clean:
+        return 1.0
+
+    # Substring match (review dish is part of menu dish)
+    if r_clean in m_clean:
+        return 0.92
+
+    # Reverse substring (menu dish is part of review dish)
+    if m_clean in r_clean:
+        return 0.85
+
+    # Token overlap (Jaccard similarity) - using cleaned tokens
+    r_tokens = set(r_clean.split())
+    m_tokens = set(m_clean.split())
+
+    if r_tokens and m_tokens:
+        intersection = len(r_tokens & m_tokens)
+        union = len(r_tokens | m_tokens)
+        jaccard = intersection / union if union > 0 else 0.0
+
+        # Category-based prioritization
+        # Normalize category to lower case for matching
+        category = menu_category.lower()
+
+        # Main course categories (entrees, mains)
+        is_main = any(term in category for term in ['main', 'entree', 'entrée', 'dinner', 'lunch'])
+
+        # Side/appetizer categories
+        is_side = any(term in category for term in ['side', 'appetizer', 'starter', 'small plate'])
+
+        # If review has multiple words (combo like "burger and fries")
+        # and menu is a side, penalize heavily
+        if len(r_tokens) > 1 and is_side:
+            # Check if review has words NOT in menu (likely the main dish)
+            unmatched_review_words = r_tokens - m_tokens
+            if unmatched_review_words:
+                # Review mentions other items, menu is just a side -> low score
+                return max(0.25, jaccard * 0.5)  # Penalty
+
+        # Boost main courses when matching combos
+        category_boost = 0.0
+        if len(r_tokens) > 1 and is_main:
+            category_boost = 0.15  # Boost entrees when review is a combo
+
+        # Key word matches
+        key_matches = len(r_tokens & m_tokens)
+        key_boost = 0.0
+        if key_matches >= 1:
+            key_boost = min(0.3, key_matches * 0.15)
+
+        # Fuzzy string similarity
+        fuzzy = SequenceMatcher(None, r_clean, m_clean).ratio()
+
+        # Blend: 50% jaccard + 30% fuzzy + key boost + category boost
+        return min(0.95, 0.5 * jaccard + 0.3 * fuzzy + key_boost + category_boost)
+
+    return 0.0
+
+
 def _aggregate_now(out_dir: Path, label: str = "", category: str = "restaurant"):  # === SIMPLIFIED ===
     """
     Rebuild authors.csv and dish_mentions CSV from current reviews.json.
@@ -314,7 +518,6 @@ def _aggregate_now(out_dir: Path, label: str = "", category: str = "restaurant")
         # authors (incremental if your helper supports it)
         authors_csv_path = write_or_update_authors_csv(reviews_json, authors_csv)
 
-        print(f"📊 Processing place as category: {category} (unified dish extraction)")
 
         # Always use dish_lexicon.csv - it covers food, drinks, and other items
         lexicon_csv_path = get_lexicon_path_for_category(out_dir, "restaurant")
@@ -335,10 +538,123 @@ def _aggregate_now(out_dir: Path, label: str = "", category: str = "restaurant")
             limit_per_ethnicity=5,
             out_csv_topk=out_csv_topk,
         )
-        print(f"🟢 aggregated recommendations ({label}) → {out_csv}")
         
     except Exception as e:
-        print(f"⚠️ aggregate failed ({label}): {e}")
+
+
+async def extract_menu_from_page(page, page_url: str) -> Optional[Dict]:
+    """
+    Extract menu structure from an ordering page using OpenAI.
+    Assumes page is already loaded and ready.
+
+    Returns menu_data dict or None if extraction fails.
+    """
+    try:
+        # Scroll to load menu content (slower for lazy-loaded items)
+        for i in range(15):  # More scrolls to load all lazy content
+            await page.mouse.wheel(0, 2500)
+            await page.wait_for_timeout(1500)  # Longer wait for lazy loading
+            if i % 3 == 0:
+
+        # Final wait for last batch of items to load
+        await page.wait_for_timeout(3000)
+
+        html_content = await page.content()
+
+        # Clean HTML to reduce token usage
+        html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+        html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+        html_content = re.sub(r'<!--.*?-->', '', html_content, flags=re.DOTALL)
+        html_content = re.sub(r'\s+style="[^"]*"', '', html_content, flags=re.IGNORECASE)
+
+        # Debug: Save cleaned HTML for inspection (DoorDash only)
+        if 'doordash.com' in page_url.lower() and len(html_content) < 5000:
+            debug_file = Path("/tmp/doordash_menu_debug.html")
+            debug_file.write_text(html_content, encoding='utf-8')
+
+        # Verify menu content is present
+        menu_indicators = ['price', '$', 'menu', 'item', 'add to cart', 'description']
+        has_menu = any(indicator in html_content.lower() for indicator in menu_indicators)
+        if not has_menu:
+            return None
+
+        # Truncate if needed
+        max_html_length = 90000
+        if len(html_content) > max_html_length:
+            html_content = html_content[:max_html_length]
+
+        # Build AI prompt
+        prompt = f'''You are analyzing a restaurant's online ordering page.
+
+Extract the COMPLETE menu structure from this HTML and return ONLY valid JSON with this exact structure:
+
+{{
+    "categories": ["Appetizers", "Main Courses", "Sides", "Desserts"],
+    "items": [
+        {{
+            "name": "Item Name",
+            "description": "Item description",
+            "price": "$12.99",
+            "category": "Main Courses",
+            "dietary_info": ["vegetarian", "gluten-free"],
+            "customizations": ["size", "spice level"]
+        }}
+    ]
+}}
+
+Important:
+- Extract EVERY FOOD ITEM in the HTML (aim for 50-100+ items if available)
+- Include prices whenever visible (very important!)
+- Clean category names (use "Main Courses" not "Entrees", "Sides" not "Side Orders")
+- Extract dietary info from badges/labels (vegetarian, vegan, gluten-free, etc.)
+- Extract customization options (sizes, add-ons, spice levels, etc.)
+- **EXCLUDE ALL BEVERAGES/DRINKS** (soda, juice, coffee, tea, beer, wine, cocktails, etc.)
+- Focus ONLY on solid food items (appetizers, entrees, sides, desserts)
+- Include items from ALL categories in the menu
+- Return ONLY the JSON, no other text
+
+HTML content:
+{html_content}
+'''
+
+        # Call OpenAI API
+        client = OpenAI()
+
+        start_time = time.time()
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=12000,
+            temperature=0.1
+        )
+        elapsed = time.time() - start_time
+
+        # Log usage and cost
+        input_tokens = response.usage.prompt_tokens
+        output_tokens = response.usage.completion_tokens
+        total_tokens = response.usage.total_tokens
+        input_cost = (input_tokens / 1_000_000) * 0.15
+        output_cost = (output_tokens / 1_000_000) * 0.60
+        total_cost = input_cost + output_cost
+
+
+        # Parse response
+        response_text = response.choices[0].message.content.strip()
+        json_start = response_text.find('{')
+        json_end = response_text.rfind('}') + 1
+
+        if json_start >= 0 and json_end > json_start:
+            json_text = response_text[json_start:json_end]
+            menu_data = json.loads(json_text)
+            items_with_prices = sum(1 for item in menu_data.get('items', []) if item.get('price'))
+            return menu_data
+        else:
+            return None
+
+    except Exception as e:
+        traceback.print_exc()
+        return None
+
 
 async def scrape_reviews(
         place_url: str,
@@ -351,6 +667,8 @@ async def scrape_reviews(
         harvest_images_now: bool = True,
         top_k_images: int = 5,
         category: str = "restaurant",  # Use category from frontend instead of business_types
+        is_fast_job: bool = False,  # Pass fast flag for menu timing
+        contact_info: Optional[Dict] = None,  # Contact info for menu extraction
 ):
     # ---- locks ----
     lock = out_dir / ".refresh.lock"
@@ -361,15 +679,12 @@ async def scrape_reviews(
     seed_seen_count = len(seed_reviews)
     total_reviews = int(target_reviews or 0)
 
-    # pre-warm tagger so aggregation later is instant
-    try:
-        _get_nlp()("warm up")
-    except Exception:
-        pass
+    # Note: spaCy pre-warming removed to avoid 2-minute startup delay
+    # spaCy will load naturally when first needed (during dish normalization after menu extraction)
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=True,
+            headless=True,  # Set to False for debugging
             chromium_sandbox=False,
             args=[
                 "--no-sandbox",
@@ -400,15 +715,408 @@ async def scrape_reviews(
                 await route.continue_()
         await context.route("**/*", _route_filter)
 
-        deadline = (time.perf_counter() + time_budget) if time_budget else None
-
         try:
+            # Navigate main page to place_url FIRST (stays here for review scraping later)
+            await page.goto(place_url, wait_until='domcontentloaded')
+            await page.wait_for_timeout(2000)
+
+            # ---------- EXTRACT MENU (in separate tabs) ----------
+            # Only extract menu if not already cached (skip on FULL job if menu exists)
+            menu_file = out_dir / "menu_structure.json"
+            skip_menu = menu_file.exists()
+
+            if skip_menu:
+
+            if not skip_menu:
+                # Create a SEPARATE page for menu extraction so main page stays completely clean
+                menu_page = await context.new_page()
+
+                try:
+                    # Turn off request blocking for menu extraction (need images/fonts)
+                    try:
+                        await context.unroute("**/*", _route_filter)
+                    except Exception:
+                        pass
+
+                    # Navigate to place in the SEPARATE menu_page (not main page)
+                    await menu_page.goto(place_url, wait_until="domcontentloaded")
+                    await menu_page.wait_for_timeout(2000)  # Simple wait for content to render
+
+                    # Try to extract menu from ordering URL
+                    try:
+
+                        # Look for "Order online" button on menu_page
+                        order_button = None
+                        order_button_selectors = [
+                            'div:has-text("Order online")',
+                            'button:has-text("Order online")',
+                            'a:has-text("Order online")',
+                            '[aria-label*="Order online"]'
+                        ]
+
+                        for selector in order_button_selectors:
+                            try:
+                                button = menu_page.locator(selector).first
+                                if await button.count():
+                                    try:
+                                        await button.wait_for(state="visible", timeout=3000)
+                                        order_button = button
+                                        break
+                                    except:
+                                        continue
+                            except Exception:
+                                continue
+
+                        if order_button:
+                            # Click to open ordering page in new tab
+                            current_pages = len(context.pages)
+                            await order_button.click()
+                            await menu_page.wait_for_timeout(2000)
+
+                            # Check if new tab opened
+                            new_pages = context.pages
+                            if len(new_pages) > current_pages:
+                                # Get the ordering page (might be Google chooser)
+                                ordering_page = new_pages[-1]
+                                await ordering_page.wait_for_load_state('networkidle', timeout=10000)
+                                ordering_url = ordering_page.url
+
+                                # Initialize URLs
+                                ordering_url_pickup = None
+                                ordering_url_delivery = None
+
+                                # Track if menu was already extracted (from delivery page)
+                                menu_extracted = False
+                                menu_data_cached = None
+
+                                # Check if this is Google's provider chooser page
+                                if 'google.com/viewer/chooseprovider' in ordering_url:
+
+                                    # Wait for chooser page to be ready
+                                    await ordering_page.wait_for_timeout(3000)
+
+                                    # FIRST: Duplicate tab to get delivery URL
+                                    try:
+                                        delivery_page = await context.new_page()
+                                        await delivery_page.goto(ordering_url, timeout=10000)
+                                        await delivery_page.wait_for_load_state('networkidle', timeout=10000)
+                                        await delivery_page.wait_for_timeout(2000)
+
+                                        # Try to click "Delivery" button with precise selectors
+                                        delivery_selectors = [
+                                            'text=/^Delivery$/i',  # Exact match only
+                                            'div[role="button"]:has-text("Delivery")',
+                                            'button:has-text("Delivery")',
+                                            '[role="radio"]:has-text("Delivery")',
+                                            '[role="tab"]:has-text("Delivery")',
+                                            'span:has-text("Delivery")',
+                                            'a:has-text("Delivery")',
+                                            '[aria-label*="Delivery" i]',
+                                        ]
+
+                                        delivery_clicked = False
+                                        for selector in delivery_selectors:
+                                            try:
+                                                elements = delivery_page.locator(selector)
+                                                count = await elements.count()
+
+                                                if count > 0:
+                                                    # Try each matching element until one works
+                                                    for i in range(count):
+                                                        try:
+                                                            btn = elements.nth(i)
+                                                            if await btn.is_visible():
+                                                                # Get text to verify it's the right element
+                                                                text = await btn.text_content()
+                                                                text = text.strip() if text else ""
+
+                                                                # Must be short text (just "Delivery", not a long description)
+                                                                if len(text) < 20:
+                                                                    await btn.click(timeout=3000)
+                                                                    # Wait for page to update after clicking delivery
+                                                                    await delivery_page.wait_for_timeout(2000)
+                                                                    delivery_clicked = True
+                                                                    break
+                                                        except:
+                                                            continue
+
+                                                    if delivery_clicked:
+                                                        break
+                                            except:
+                                                continue
+
+                                        if not delivery_clicked:
+                                        else:
+                                            # Now re-query for platform links AFTER clicking delivery
+                                            await delivery_page.wait_for_timeout(1000)
+                                            all_elements = await delivery_page.locator('a:visible, button:visible').all()
+
+                                            # Smart platform selection: Preferred by business > DoorDash > First option
+                                            platform_element = None
+                                            platform_text = None
+                                            candidates = []
+
+                                            # Collect all platform candidates
+                                            for el in all_elements:
+                                                try:
+                                                    text = await el.inner_text()
+                                                    text = text.strip()
+                                                    if len(text) > 0:
+                                                        candidates.append((el, text))
+                                                except:
+                                                    continue
+
+                                            # Prioritize: 1) Preferred by business, 2) DoorDash, 3) First option
+                                            if candidates:
+                                                # Look for "Preferred by business"
+                                                for el, text in candidates:
+                                                    if "preferred by business" in text.lower():
+                                                        platform_element = el
+                                                        platform_text = text
+                                                        break
+
+                                                # If not found, look for Uber Eats (easier to automate than DoorDash)
+                                                if not platform_element:
+                                                    for el, text in candidates:
+                                                        if "uber" in text.lower():
+                                                            platform_element = el
+                                                            platform_text = text
+                                                            break
+
+                                                # Fallback to first option
+                                                if not platform_element:
+                                                    platform_element, platform_text = candidates[0]
+
+                                            # Now click the platform element we found
+                                            if platform_element:
+                                                try:
+                                                    current_page_count = len(context.pages)
+                                                    await platform_element.click(force=True)
+                                                    await delivery_page.wait_for_timeout(3000)
+
+                                                    # Check if new tab opened
+                                                    if len(context.pages) > current_page_count:
+                                                        await delivery_page.close()
+                                                        delivery_page = context.pages[-1]
+                                                        await delivery_page.wait_for_timeout(2000)
+                                                    else:
+                                                        await delivery_page.wait_for_timeout(2000)
+
+                                                    ordering_url_delivery = delivery_page.url
+
+                                                    # If delivery is DoorDash, wait for Cloudflare then extract
+                                                    if 'doordash.com' in ordering_url_delivery.lower():
+
+                                                        # Wait for network to settle (Cloudflare check completes)
+                                                        try:
+                                                            await delivery_page.wait_for_load_state('networkidle', timeout=20000)
+                                                        except Exception:
+
+                                                        # Extra buffer for menu items to render
+                                                        await delivery_page.wait_for_timeout(3000)
+
+                                                        menu_data_cached = await extract_menu_from_page(delivery_page, ordering_url_delivery)
+                                                        if menu_data_cached:
+                                                            menu_extracted = True
+
+                                                except Exception as e:
+                                            else:
+
+                                        # Close delivery tab
+                                        await delivery_page.close()
+                                    except Exception as e:
+
+                                    # SECOND: Click platform on main page to get pickup URL
+                                    all_elements = await ordering_page.locator('a:visible, button:visible').all()
+
+                                    # Smart platform selection: Preferred by business > DoorDash > First option
+                                    platform_element = None
+                                    selected_platform = None
+                                    candidates = []
+
+                                    # Collect all platform candidates
+                                    for el in all_elements:
+                                        try:
+                                            text = await el.inner_text()
+                                            text = text.strip()
+                                            if len(text) > 0:
+                                                candidates.append((el, text))
+                                        except:
+                                            continue
+
+                                    # Prioritize: 1) Preferred by business, 2) DoorDash, 3) First option
+                                    if candidates:
+                                        # Look for "Preferred by business"
+                                        for el, text in candidates:
+                                            if "preferred by business" in text.lower():
+                                                platform_element = el
+                                                selected_platform = text
+                                                break
+
+                                        # If not found, look for Uber Eats (easier to automate than DoorDash)
+                                        if not platform_element:
+                                            for el, text in candidates:
+                                                if "uber" in text.lower():
+                                                    platform_element = el
+                                                    selected_platform = text
+                                                    break
+
+                                        # Fallback to first option
+                                        if not platform_element:
+                                            platform_element, selected_platform = candidates[0]
+
+                                    if platform_element:
+                                        current_page_count = len(context.pages)
+
+                                        try:
+                                            await platform_element.click(force=True)
+                                            await ordering_page.wait_for_timeout(3000)
+
+                                            # Check if a NEW tab opened
+                                            if len(context.pages) > current_page_count:
+                                                await ordering_page.close()
+                                                ordering_page = context.pages[-1]
+                                                await ordering_page.wait_for_timeout(2000)
+                                            else:
+                                                await ordering_page.wait_for_timeout(2000)
+
+                                            ordering_url_pickup = ordering_page.url
+
+                                            # IMMEDIATELY save minimal menu structure (URLs only) for fast iOS access
+                                            # iOS app polls for this file within 30 seconds, but full scraping takes 2+ minutes
+                                            # Save it now so iOS can open WebView quickly for fresh restaurants
+                                            if ordering_url_delivery or ordering_url_pickup:
+                                                source_url = ordering_url_delivery or ordering_url_pickup
+                                                url_lower = source_url.lower()
+
+                                                if 'doordash.com' in url_lower or 'order.online' in url_lower:
+                                                    platform = "doordash"
+                                                elif 'ubereats.com' in url_lower or 'uber.com' in url_lower:
+                                                    platform = "ubereats"
+                                                elif 'grubhub.com' in url_lower:
+                                                    platform = "grubhub"
+                                                elif 'postmates.com' in url_lower:
+                                                    platform = "postmates"
+                                                elif 'seamless.com' in url_lower:
+                                                    platform = "seamless"
+                                                elif 'caviar.com' in url_lower:
+                                                    platform = "caviar"
+                                                else:
+                                                    platform = "custom"
+
+                                                # Save minimal menu structure (URLs only) for immediate access
+                                                minimal_menu = {
+                                                    'restaurant_id': place_id,
+                                                    'restaurant_name': contact_info.get('name', 'Unknown') if contact_info else f'Restaurant_{place_id}',
+                                                    'categories': [],
+                                                    'items': [],
+                                                    'supports_online_ordering': True,
+                                                    'ordering_url_pickup': ordering_url_pickup,
+                                                    'ordering_url_delivery': ordering_url_delivery,
+                                                    'ordering_platform': platform,
+                                                    'phone_number': contact_info.get('phone') if contact_info else None,
+                                                    'cached_at': pd.Timestamp.now().isoformat(),
+                                                    'success': False  # Will be updated to True if menu extraction succeeds
+                                                }
+
+                                                menu_file = out_dir / "menu_structure.json"
+                                                menu_file.write_text(json.dumps(minimal_menu, indent=2, ensure_ascii=False), encoding='utf-8')
+                                        except Exception as e:
+                                            try:
+                                                await ordering_page.close()
+                                            except:
+                                                pass
+                                    else:
+                                        await ordering_page.close()
+                                else:
+                                    # Not a chooser page - direct ordering URL
+                                    ordering_url_pickup = ordering_url
+    
+                            # Only continue if we successfully got past the chooser (or weren't on one)
+                            if not ordering_page.is_closed():
+                                # Extract menu only if not already extracted from delivery page
+                                if not menu_extracted:
+                                    menu_data_cached = await extract_menu_from_page(ordering_page, ordering_url_pickup or ordering_url)
+                                else:
+
+                                # ALWAYS save menu structure if we have ordering URLs (even if menu extraction failed)
+                                # This enables WebView fallback when Cloudflare blocks menu scraping
+                                if ordering_url_delivery or ordering_url_pickup:
+                                    # Detect platform from whichever URL we have
+                                    source_url = ordering_url_delivery or ordering_url_pickup or ordering_url
+                                    url_lower = source_url.lower()
+
+                                    if 'doordash.com' in url_lower or 'order.online' in url_lower:
+                                        platform = "doordash"
+                                    elif 'ubereats.com' in url_lower or 'uber.com' in url_lower:
+                                        platform = "ubereats"
+                                    elif 'grubhub.com' in url_lower:
+                                        platform = "grubhub"
+                                    elif 'postmates.com' in url_lower:
+                                        platform = "postmates"
+                                    elif 'seamless.com' in url_lower:
+                                        platform = "seamless"
+                                    elif 'caviar.com' in url_lower:
+                                        platform = "caviar"
+                                    else:
+                                        platform = "custom"
+
+                                    # Save menu structure (full if available, minimal if menu extraction failed)
+                                    menu_structure = {
+                                        'restaurant_id': place_id,
+                                        'restaurant_name': contact_info.get('name', 'Unknown') if contact_info else f'Restaurant_{place_id}',
+                                        'categories': menu_data_cached.get('categories', []) if menu_data_cached else [],
+                                        'items': menu_data_cached.get('items', []) if menu_data_cached else [],
+                                        'supports_online_ordering': True,
+                                        'ordering_url_pickup': ordering_url_pickup,
+                                        'ordering_url_delivery': ordering_url_delivery,
+                                        'ordering_platform': platform,
+                                        'phone_number': contact_info.get('phone') if contact_info else None,
+                                        'cached_at': pd.Timestamp.now().isoformat(),
+                                        'success': bool(menu_data_cached and menu_data_cached.get('items'))  # NEW: Track if menu extraction succeeded
+                                    }
+
+                                    menu_file = out_dir / "menu_structure.json"
+                                    menu_file.write_text(json.dumps(menu_structure, indent=2, ensure_ascii=False), encoding='utf-8')
+
+                                    if menu_data_cached and menu_data_cached.get('items'):
+                                    else:
+                                elif menu_data_cached:
+                                    # Edge case: Have menu data but no ordering URLs (shouldn't happen but handle it)
+
+                                # Close ordering page after menu extraction
+                                try:
+                                    await ordering_page.close()
+                                except:
+                                    pass
+                        else:
+
+                    except Exception as menu_ex:
+                        traceback.print_exc()
+
+                except Exception as e:
+                    traceback.print_exc()
+                finally:
+                    # Always close menu_page to free resources
+                    try:
+                        await menu_page.close()
+                    except Exception:
+                        pass
+
+            # Main page already on place_url, just re-enable request blocking for reviews
+            await page.wait_for_timeout(500)  # Brief pause after menu tabs close
+
+            # Re-enable request blocking for reviews
+            await context.route("**/*", _route_filter)
+
+            # Set deadline AFTER menu extraction (so menu time doesn't count against review scraping budget)
+            deadline = (time.perf_counter() + time_budget) if time_budget else None
+
             # ---------- scrape reviews ----------
             await page.add_style_tag(content="""
               *,*::before,*::after{animation:none!important;transition:none!important}
               html{scroll-behavior:auto!important}
             """)
-            await page.goto(place_url, wait_until="domcontentloaded")
 
             handle = await page.evaluate_handle(
                 """() => {
@@ -561,7 +1269,6 @@ async def scrape_reviews(
             try:
                 _aggregate_now(out_dir, label="fast", category=category)
             except Exception as e:
-                print(f"⚠️ aggregate failed (fast): {e}")
 
         # ---------- harvest images using SAME context ----------
         if harvest_images_now:
@@ -580,9 +1287,7 @@ async def scrape_reviews(
                 try:
                     await page2.goto(place_url, wait_until="domcontentloaded")
                     await _harvest_menu_images_on_page(page2, top_dishes, out_dir, max_scrolls=60)
-                    print(f"🖼️ harvested images for {len(top_dishes)} dishes (FAST top{top_k_images}).")
                 except Exception as e:
-                    print(f"⚠️ menu image harvest failed: {e}")
                 finally:
                     try: await page2.close()
                     except Exception: pass
@@ -596,6 +1301,12 @@ async def scrape_reviews(
     # Aggregate outside the browser for a final, consistent output
     if not build_mentions_now:
         _aggregate_now(out_dir, label="post-scrape", category=category)
+
+    # Match review dishes to menu items and add prices
+    _match_dishes_to_menu(out_dir)
+
+    # No longer need to enqueue menu job - menu is extracted in same browser session above
+
     for name in (".refresh.lock", ".enqueue.lock"):
         try: (out_dir / name).unlink(missing_ok=True)
         except Exception: pass
@@ -844,8 +1555,6 @@ def build_dish_mentions(
     reviews_df["ethnicity_ui"] = g.apply(lambda x: map_group_to_ui(x) if isinstance(x, str) else None)
     reviews_df["tab"] = g.apply(lambda x: map_group_to_tab(x) if isinstance(x, str) else None)
 
-    print("build_dish_mentions(): columns ->", list(reviews_df.columns))
-    print("head ->", reviews_df.head(2))
 
     # ------------ lexicon index ------------
     use_lex = mode in ("lexicon","both")
@@ -909,14 +1618,12 @@ def build_dish_mentions(
     # if nothing, still produce the (empty) out_csv
     if raw.empty:
         Path(out_csv).write_text("", encoding="utf-8")
-        print(f"ℹ️ No dish mentions found (mode={mode}).")
         return raw
 
     # ------------ aggregate for UI ------------
     raw = raw[raw["tab"].isin(TAB_LABELS)]
     if raw.empty:
         Path(out_csv).write_text("", encoding="utf-8")
-        print(f"ℹ️ No dish mentions after tab filter.")
         return raw
 
     # pick a representative display per (tab, dish_key)
@@ -954,9 +1661,7 @@ def build_dish_mentions(
         tmp["__rank"] = tmp.groupby("ethnicity_ui").cumcount()
         topk_df = tmp[tmp["__rank"] < int(limit_per_ethnicity)].drop(columns="__rank")
         topk_df.to_csv(out_csv_topk, index=False)
-        print(f"✅ dish_mentions (TOP{limit_per_ethnicity}) → {out_csv_topk}  ({len(topk_df)} rows)")
 
-    print(f"✅ dish_mentions (FULL) → {out_csv}  ({len(agg)} rows; mode={mode}; {time.time()-t0:.2f}s)")
     return agg
 
 
@@ -1112,12 +1817,10 @@ def write_or_update_authors_csv(reviews_json_path: str, authors_csv_path: str) -
                 combined.loc[mask, col] = to_enrich[col].values
 
         combined.to_csv(p, index=False)
-        print(f"✅ Updated authors.csv → {p}  ({len(combined)} authors)")
     else:
         # ✅ enrich on first create too
         new = enrich_groups_with_ethnicolr(new, prob_threshold=0.7)
         new.to_csv(p, index=False)
-        print(f"✅ Created authors.csv → {p}  ({len(new)} authors)")
 
     return str(p)
 
@@ -1127,11 +1830,7 @@ def enrich_groups_with_ethnicolr(df: pd.DataFrame, prob_threshold: float = 0.7) 
     Does NOT overwrite existing non-blank groups.
     Robust to Ethnicolr schema/version differences.
     """
-    try:
-        import ethnicolr  # pip install ethnicolr
-    except Exception:
-        print("[authors] ethnicolr not installed; skipping auto group fill")
-        return df
+    import ethnicolr  # Lazy import (deferred to avoid 2-minute startup delay for menu extraction)
 
     df = df.copy()
     if "group" not in df.columns:
@@ -1140,7 +1839,6 @@ def enrich_groups_with_ethnicolr(df: pd.DataFrame, prob_threshold: float = 0.7) 
     # Only rows that need a label and have at least a first or last name
     need = df["group"].fillna("").eq("")
     if "first" not in df.columns or "last" not in df.columns:
-        print("[authors] missing first/last columns; cannot run ethnicolr")
         return df
     sub = df.loc[need, ["first", "last"]].fillna("")
     sub = sub[(sub["first"] != "") | (sub["last"] != "")]
@@ -1165,7 +1863,6 @@ def enrich_groups_with_ethnicolr(df: pd.DataFrame, prob_threshold: float = 0.7) 
             label_col = cols_lc[cand]
             break
     if label_col is None:
-        print("[authors] ethnicolr returned unexpected schema; skipping auto fill")
         return df
 
     # --- Detect probability column (single) or compute from distributed ---
@@ -1212,7 +1909,6 @@ def enrich_groups_with_ethnicolr(df: pd.DataFrame, prob_threshold: float = 0.7) 
             df["prob"] = ""
         df.loc[to_fill_idx, "prob"] = p_series.loc[to_fill_idx].round(3).astype(str).values
 
-    print(f"[authors] ethnicolr filled groups for {len(to_fill_idx)} authors (thr={prob_threshold})")
     return df
 
 

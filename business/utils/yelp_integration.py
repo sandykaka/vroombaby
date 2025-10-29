@@ -114,21 +114,15 @@ def get_yelp_url_from_place_id(place_id):
         }
         
     except Exception as e:
-        print(f"Error getting Yelp URL for place_id {place_id}: {e}")
         return None
 
 
 def test_yelp_integration(place_id):
     """Test function to verify Yelp URL generation (not validation due to bot blocking)"""
-    print(f"Testing Yelp integration for place_id: {place_id}")
     
     result = get_yelp_url_from_place_id(place_id)
     
     if result:
-        print(f"Restaurant: {result['google_info']['name']}")
-        print(f"Location: {result['google_info']['location']}")
-        print(f"Generated Yelp URL: {result['yelp_url']}")
-        print(f"✅ URL Generated Successfully")
         logger.info("Note: Use this URL with Playwright for scraping (Yelp blocks direct HTTP requests)")
         return result
     else:
@@ -168,14 +162,11 @@ async def scrape_yelp_reviews(
         except Exception:
             reviews = []
     
-    print(f"🎯 Starting Yelp scrape: {yelp_url}")
-    print(f"📁 Output: {out_dir}")
-    print(f"🎯 Target: {target_reviews} reviews")
     logger.info(f"Starting Yelp scrape: {yelp_url}, target: {target_reviews} reviews")
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=False,  # Show browser window to avoid detection
+            headless=True,  # Set to False to see browser during debugging
             chromium_sandbox=False,
             args=[
                 "--no-sandbox",
@@ -351,7 +342,6 @@ async def scrape_yelp_reviews(
                     for indicator in yelp_indicators:
                         if indicator in page_html.lower():
                             count = page_html.lower().count(indicator)
-                            print(f"✅ Found '{indicator}': {count} times")
                     
                     # Look for common patterns
                     debug_selectors = [
@@ -367,7 +357,6 @@ async def scrape_yelp_reviews(
                     for debug_sel in debug_selectors:
                         debug_count = await page.locator(debug_sel).count()
                         if debug_count > 0:
-                            print(f"🔍 Found {debug_count} elements with: {debug_sel}")
                     
                     logger.debug("No reviews found - breaking")
                     break
@@ -416,7 +405,6 @@ async def scrape_yelp_reviews(
                 
                 # Increment page counter after processing this batch
                 pages_processed += 1
-                print(f"📄 Processed page {pages_processed}/{max_pages} - Found {new_reviews_this_batch} new reviews")
                 logger.info(f"Processed page {pages_processed}/{max_pages} - Found {new_reviews_this_batch} new reviews")
                 
                 if new_reviews_this_batch == 0:
@@ -456,7 +444,6 @@ async def scrape_yelp_reviews(
             
             # Save reviews to main reviews.json
             reviews_file.write_text(json.dumps(reviews, indent=2), encoding="utf-8")
-            print(f"✅ Saved {len(reviews)} total reviews (including Yelp) to {reviews_file}")
             logger.info(f"Saved {len(reviews)} total reviews to {reviews_file}")
             
         except Exception as e:
@@ -508,7 +495,6 @@ async def extract_author_details(review_elem, author_name):
                     title = await elem.first.get_attribute("title")
                     if title and len(title) > len(author_name):
                         details['full_name'] = title.strip()
-                        print(f"  📝 Found full name: '{title}'")
                         break
                         
                     # Try to get href and extract from URL
@@ -516,7 +502,6 @@ async def extract_author_details(review_elem, author_name):
                     if href and "/user_details" in href:
                         # Extract user ID or additional info from URL
                         details['profile_url'] = href
-                        print(f"  🔗 Found profile URL: '{href}'")
             except Exception:
                 continue
         
@@ -538,7 +523,6 @@ async def extract_author_details(review_elem, author_name):
                         location = location_text.replace("from", "").strip()
                         if location:
                             details['location'] = location
-                            print(f"  📍 Found location: '{location}'")
                             break
             except Exception:
                 continue
@@ -557,7 +541,6 @@ async def extract_author_details(review_elem, author_name):
                     stats_text = await elem.first.inner_text()
                     if "review" in stats_text:
                         details['review_count'] = stats_text.strip()
-                        print(f"  📊 Found stats: '{stats_text}'")
                         break
             except Exception:
                 continue
@@ -571,7 +554,6 @@ async def extract_author_details(review_elem, author_name):
                 details['name_type'] = 'partial' if len(author_name.split()) == 1 else 'full'
     
     except Exception as e:
-        print(f"⚠️  Error extracting author details: {e}")
     
     return details
 
@@ -910,7 +892,6 @@ async def extract_yelp_review_data(review_elem):
         }
         
     except Exception as e:
-        print(f"⚠️  Error extracting review data: {e}")
         return None
 
 
@@ -927,7 +908,6 @@ def scrape_yelp_from_place_id(place_id: str, target_reviews: int = 50, fast: boo
     # Get Yelp URL from place_id
     result = get_yelp_url_from_place_id(place_id)
     if not result:
-        print("❌ Could not generate Yelp URL")
         return None
     
     yelp_url = result['yelp_url']
@@ -951,7 +931,6 @@ def scrape_yelp_from_place_id(place_id: str, target_reviews: int = 50, fast: boo
     try:
         from business.management.commands.scrape_reviews import _aggregate_now
         _aggregate_now(out_dir, label="yelp-scrape")
-        print(f"✅ Updated dish_mentions.csv and dish_mentions_top5.csv for {place_id}")
         logger.info(f"Updated dish_mentions CSVs for {place_id}")
         
         # After updating CSVs, image harvesting is now integrated into review scraping
@@ -965,7 +944,6 @@ def scrape_yelp_from_place_id(place_id: str, target_reviews: int = 50, fast: boo
             f.write(f"[{timestamp}] YELP SUCCESS: {restaurant_name} -> {review_count} total reviews, target: {target_reviews}\n")
             
     except Exception as e:
-        print(f"⚠️ Failed to update dish CSVs: {e}")
         logger.error(f"Failed to update dish CSVs: {e}")
         
         # Log error to scrape.log file  
@@ -987,9 +965,7 @@ if __name__ == "__main__":
     sweet_maple_place_id = "ChIJTel9dGCAhYARQGwrTfGZ07M"
     
     # Test URL generation
-    print("=== Testing URL Generation ===")
     test_yelp_integration(sweet_maple_place_id)
     
     # Test scraping (uncomment to run)
-    print("\n=== Testing Scraping ===")
     scrape_yelp_from_place_id(sweet_maple_place_id, target_reviews=50, fast=True)

@@ -13,8 +13,25 @@ from firebase_admin import credentials
 from django.core.wsgi import get_wsgi_application
 
 # Set the path to your service account key JSON file.
-# It’s best to load this path from an environment variable.
-service_account_path = os.environ.get('FIREBASE_SERVICE_ACCOUNT_PATH', '/home/ubuntu/vroombaby/coffeewithexpert_service_account_key.json')
+# Smart path selection for different environments and projects
+import os
+
+# Try environment variable first
+service_account_path = os.environ.get('FIREBASE_SERVICE_ACCOUNT_PATH')
+
+if not service_account_path:
+    # Auto-detect based on environment - Ethnopicks only
+    if os.path.exists('/Users/sandeshkakade/gitRepos/vroombaby/ethnopicks_service_account_key.json'):
+        # Local development with Ethnopicks
+        service_account_path = '/Users/sandeshkakade/gitRepos/vroombaby/ethnopicks_service_account_key.json'
+    elif os.path.exists('/home/ubuntu/vroombaby/ethnopicks_service_account_key.json'):
+        # Ubuntu production with Ethnopicks
+        service_account_path = '/home/ubuntu/vroombaby/ethnopicks_service_account_key.json'
+    else:
+        # Error - no valid service account found
+        raise FileNotFoundError("Ethnopicks Firebase service account key not found. Please ensure ethnopicks_service_account_key.json exists.")
+
+print(f"Using Firebase service account: {service_account_path}")
 
 # Initialize Firebase Admin.
 cred = credentials.Certificate(service_account_path)

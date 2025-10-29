@@ -31,6 +31,9 @@ STALE_SECONDS = 7 * 24 * 60 * 60    # 7 days
 LOCK_STALE_S  = 20 * 60             # 20 minutes
 DEDUP_TTL_S   = 2 * 60             # 2 minutes
 
+# Menu caching constants
+MENU_CACHE_DAYS = 30                # Menu cache duration
+
 def place_dir(place_id: str) -> Path:
 
     d = REVIEWS_DIR / place_id
@@ -114,7 +117,7 @@ def _unlock(lock_path: Path) -> None:
 
 def is_stale(csv_path: Path) -> bool:
     try:
-        return (time.time() - csv_path.stat().st_mtime) > 3600
+        return (time.time() - csv_path.stat().st_mtime) > STALE_SECONDS
     except FileNotFoundError:
         return True
 
@@ -310,3 +313,12 @@ def ensure_csv_async(
     job_path = enqueue_scrape_job(place_id, mode=mode, target=target, budget=budget, queue_dir=queue_dir, category=category)
     logger.info("📥 ENQUEUED %s job %s → %s", mode.upper(), place_id, job_path)
     return True
+
+
+# Menu caching functions
+
+def menu_structure_path(place_id: str) -> Path:
+    """Path to cached menu structure JSON"""
+    return place_dir(place_id) / "menu_structure.json"
+
+# Menu job enqueueing functions removed - menu is now extracted inline during review scraping

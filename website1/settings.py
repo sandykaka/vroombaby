@@ -32,7 +32,7 @@ SECRET_KEY = ')1x1+(1p0x*=8_0lfcn8^6!*#6ri-9zavxi14@nyug%!pa5k0m'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'www.vroombaby.com', 'vroombaby.com', '44.214.122.27', '172.26.12.62',
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '172.20.10.2', 'www.vroombaby.com', 'vroombaby.com', '44.214.122.27', '192.168.12.66',
                  'www.schoolconvo.com', 'schoolconvo.com', 'www.coffeewithexpert.com', 'coffeewithexpert.com']
 # ALLOWED_HOSTS = []
 
