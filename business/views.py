@@ -1093,7 +1093,26 @@ def delivery_addresses_api(request):
                     'error': f'This address already exists as "{existing_address.name}". Please use a different address.'
                 }, status=400)
 
-            # Create new address
+            # Geocode address to get lat/lng coordinates
+            latitude = None
+            longitude = None
+            try:
+                gmaps = googlemaps.Client(key=settings.GOOGLE_API_KEY)
+                full_address = f"{data['street_address'].strip()}, {data['city'].strip()}, {data['state'].strip()} {data['zip_code'].strip()}"
+                geocode_result = gmaps.geocode(full_address)
+
+                if geocode_result and len(geocode_result) > 0:
+                    location = geocode_result[0]['geometry']['location']
+                    latitude = location['lat']
+                    longitude = location['lng']
+                    logger.info(f"✅ Geocoded address: {full_address} → ({latitude}, {longitude})")
+                else:
+                    logger.warning(f"⚠️ No geocoding results for address: {full_address}")
+            except Exception as e:
+                logger.error(f"❌ Geocoding error for address: {e}")
+                # Continue without coordinates - better to save address than fail completely
+
+            # Create new address with coordinates
             address = DeliveryAddress.objects.create(
                 user=request.user,
                 name=data['name'].strip(),
@@ -1101,6 +1120,8 @@ def delivery_addresses_api(request):
                 city=data['city'].strip(),
                 state=data['state'].strip(),
                 zip_code=data['zip_code'].strip(),
+                latitude=latitude,
+                longitude=longitude,
                 is_default=data.get('is_default', False)
             )
 
@@ -3337,7 +3358,9 @@ def _get_user_saved_addresses(user_id):
             'city': addr.city,
             'state': addr.state,
             'zip': addr.zip_code,
-            'is_default': addr.is_default
+            'is_default': addr.is_default,
+            'latitude': addr.latitude,
+            'longitude': addr.longitude
         } for addr in addresses]
 
     except Exception as e:
@@ -3548,12 +3571,38 @@ def _extract_quick_actions(ai_response, user_profile, user_message, location=Non
             # Infer user ethnicity from profile for personalization
             user_ethnicity = _infer_user_ethnicity(user_profile) if user_profile else None
 
+            # Determine which coordinates to use for restaurant search
+            # Priority: Saved delivery address coordinates > GPS location
+            search_lat = location['lat']
+            search_lng = location['lng']
+
+            if confirmed_saved_address and user_profile and user_profile.get('saved_addresses'):
+                # User confirmed delivery - use their saved address coordinates
+                default_addr = None
+                for addr in user_profile['saved_addresses']:
+                    if addr.get('is_default'):
+                        default_addr = addr
+                        break
+
+                # Fallback to first address if no default set
+                if not default_addr and user_profile['saved_addresses']:
+                    default_addr = user_profile['saved_addresses'][0]
+
+                if default_addr and default_addr.get('latitude') and default_addr.get('longitude'):
+                    search_lat = default_addr['latitude']
+                    search_lng = default_addr['longitude']
+                    logger.info(f"📍 Using saved delivery address coordinates: ({search_lat}, {search_lng}) from {default_addr.get('city', '')}, {default_addr.get('state', '')}")
+                else:
+                    logger.warning(f"⚠️ Saved address has no coordinates, falling back to GPS: ({search_lat}, {search_lng})")
+            else:
+                logger.info(f"📍 Using GPS location for pickup or no saved address: ({search_lat}, {search_lng})")
+
             # Get dishes with GEOHASH CACHING (much faster + cost-effective!)
             # This checks AI cache first, then falls back to Google + AI if needed
             all_dishes = _get_ai_dishes_with_geohash_cache(
                 cuisine=selected_cuisine,
-                user_lat=location['lat'],
-                user_lng=location['lng'],
+                user_lat=search_lat,
+                user_lng=search_lng,
                 user_ethnicity=user_ethnicity
             )
 
