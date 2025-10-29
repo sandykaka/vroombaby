@@ -3491,10 +3491,16 @@ def _extract_quick_actions(ai_response, user_profile, user_message, location=Non
     # DISH-FIRST FLOW: Show real dish buttons from nearby restaurants
     # ===================================================================
 
-    # Check if user just confirmed address/delivery (keywords: "yes", "deliver there", "delivery")
-    address_confirmed = any(phrase in user_lower for phrase in [
-        'yes', 'deliver there', 'delivery', 'pick up', 'pickup'
+    # Address is confirmed ONLY if:
+    # 1. User has saved addresses AND confirmed them ("yes", "deliver there")
+    # 2. User selected "pickup" (no address needed)
+    has_saved_address = user_profile and user_profile.get('saved_addresses')
+    confirmed_saved_address = has_saved_address and any(phrase in user_lower for phrase in [
+        'yes', 'deliver there', 'yes deliver'
     ])
+    selected_pickup = any(phrase in user_lower for phrase in ['pick up', 'pickup'])
+
+    address_confirmed = confirmed_saved_address or selected_pickup
 
     if address_confirmed and location and conversation_history:
         # Parse conversation history to find which cuisine they selected
@@ -4235,7 +4241,8 @@ def _get_ai_dishes_with_geohash_cache(cuisine, user_lat, user_lng, user_ethnicit
             restaurant_name=restaurant['name'],
             cuisine_type=cuisine,
             user_ethnicity=user_ethnicity,
-            limit=1  # 1 dish per restaurant
+            limit=1,  # 1 dish per restaurant
+            skip_scraping=True  # DON'T queue scraping during discovery phase
         )
 
         # Check if we got real cached dishes (not AI fallback)
@@ -4366,7 +4373,7 @@ Rules:
         return [{'name': name, 'description': None, 'price': None, 'ethnicity': 'Popular', 'from_ai': True} for name in fallback[:limit]]
 
 
-def _get_dishes_for_restaurant(place_id, restaurant_name, cuisine_type, user_ethnicity=None, limit=3):
+def _get_dishes_for_restaurant(place_id, restaurant_name, cuisine_type, user_ethnicity=None, limit=3, skip_scraping=False):
     """
     Get popular dishes for a restaurant - tries cache first, falls back to AI
 
@@ -4376,6 +4383,7 @@ def _get_dishes_for_restaurant(place_id, restaurant_name, cuisine_type, user_eth
         cuisine_type: Type of cuisine (pizza, indian, etc.)
         user_ethnicity: Optional - user's ethnicity for filtering
         limit: Number of dishes to return
+        skip_scraping: If True, don't queue scraping jobs (for discovery phase)
 
     Returns:
         List of dish dicts with 'name', 'price', 'ethnicity', 'from_cache' or 'from_ai'
@@ -4403,12 +4411,15 @@ def _get_dishes_for_restaurant(place_id, restaurant_name, cuisine_type, user_eth
     logger.info(f"❌ No cache for {restaurant_name}, asking AI for popular {cuisine_type} dishes")
     ai_dishes = _ask_ai_for_popular_dishes(restaurant_name, cuisine_type, user_ethnicity, limit)
 
-    # Background: Enqueue scraping for next time
-    try:
-        ensure_csv_async(place_id, fast=False, category="restaurant")
-        logger.info(f"📥 Enqueued scraping for {restaurant_name} (place_id: {place_id})")
-    except Exception as e:
-        logger.warning(f"Failed to enqueue scraping for {place_id}: {e}")
+    # Background: Enqueue scraping for next time (unless skip_scraping=True for discovery)
+    if not skip_scraping:
+        try:
+            ensure_csv_async(place_id, fast=False, category="restaurant")
+            logger.info(f"📥 Enqueued scraping for {restaurant_name} (place_id: {place_id})")
+        except Exception as e:
+            logger.warning(f"Failed to enqueue scraping for {place_id}: {e}")
+    else:
+        logger.info(f"⏭️ Skipping scraping queue for {restaurant_name} (discovery phase)")
 
     return ai_dishes
 
