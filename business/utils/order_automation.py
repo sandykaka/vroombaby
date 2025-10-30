@@ -36,6 +36,13 @@ ELEMENT_WAIT_TIMEOUT = 10_000
 BRIEF_PAUSE = 500
 
 
+def should_fallback_to_manual(start_time: float, timeout_limit: int) -> bool:
+    """Check if we should fallback to manual WebView due to timeout"""
+    import time
+    elapsed = time.time() - start_time
+    return elapsed >= timeout_limit
+
+
 async def automate_restaurant_order(
     restaurant_id: str,
     restaurant_name: str,
@@ -64,8 +71,13 @@ async def automate_restaurant_order(
             "message": "Successfully navigated to checkout"
         }
     """
+    import time
     order_id = f"auto_order_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    start_time = time.time()  # Track start time for timeout management
+    TIMEOUT_LIMIT = 150  # Fallback to WebView if automation exceeds 150s (30s buffer before 180s gunicorn timeout)
+
     logger.info(f"🤖 Starting order automation: {order_id}")
+    logger.info(f"⏱️  Timeout limit: {TIMEOUT_LIMIT}s (gunicorn timeout: 180s)")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)  # Set to False to see automation
@@ -124,6 +136,46 @@ async def automate_restaurant_order(
             delivery_popup_handled = False  # Track if we've already handled the popup
             modal_mismatch_detected = False  # Track if we hit a blocking modal (restaurant closed, etc.)
             original_url = page.url  # Save original restaurant page URL BEFORE clicking anything
+
+            # Check timeout before starting automation
+            if should_fallback_to_manual(start_time, TIMEOUT_LIMIT):
+                import time
+                elapsed = time.time() - start_time
+                logger.warning(f"⏰ Timeout reached ({elapsed:.1f}s / {TIMEOUT_LIMIT}s) - falling back to manual WebView")
+
+                # Extract session data for manual completion
+                cookies = await context.cookies()
+                serializable_cookies = []
+                for cookie in cookies:
+                    serializable_cookie = {
+                        "name": cookie.get("name", ""),
+                        "value": cookie.get("value", ""),
+                        "domain": cookie.get("domain", ""),
+                        "path": cookie.get("path", "/"),
+                        "expires": cookie.get("expires", -1),
+                        "httpOnly": cookie.get("httpOnly", False),
+                        "secure": cookie.get("secure", False),
+                        "sameSite": cookie.get("sameSite", "Lax")
+                    }
+                    serializable_cookies.append(serializable_cookie)
+
+                local_storage = {}
+                try:
+                    local_storage_raw = await page.evaluate("() => Object.assign({}, window.localStorage)")
+                    local_storage = {k: str(v) for k, v in local_storage_raw.items() if v is not None}
+                except Exception as e:
+                    logger.warning(f"Could not extract localStorage: {e}")
+
+                return {
+                    "success": False,
+                    "order_id": order_id,
+                    "dishes_added": 0,
+                    "message": f"Automation is taking longer than expected ({elapsed:.0f}s). Please complete your order manually.",
+                    "fallback_to_manual": True,
+                    "checkout_url": page.url,
+                    "session_cookies": serializable_cookies,
+                    "local_storage": local_storage
+                }
 
             # Process each dish sequentially
             for idx, dish_selection in enumerate(dish_selections):
@@ -203,6 +255,46 @@ async def automate_restaurant_order(
                     "message": "Some items may be unavailable. Please review and complete your order manually.",
                     "fallback_to_manual": True,
                     "checkout_url": checkout_url,
+                    "session_cookies": serializable_cookies,
+                    "local_storage": local_storage
+                }
+
+            # Check timeout before navigating to checkout
+            if should_fallback_to_manual(start_time, TIMEOUT_LIMIT):
+                import time
+                elapsed = time.time() - start_time
+                logger.warning(f"⏰ Timeout reached ({elapsed:.1f}s / {TIMEOUT_LIMIT}s) after adding dishes - falling back to manual WebView")
+
+                # Extract session data for manual completion
+                cookies = await context.cookies()
+                serializable_cookies = []
+                for cookie in cookies:
+                    serializable_cookie = {
+                        "name": cookie.get("name", ""),
+                        "value": cookie.get("value", ""),
+                        "domain": cookie.get("domain", ""),
+                        "path": cookie.get("path", "/"),
+                        "expires": cookie.get("expires", -1),
+                        "httpOnly": cookie.get("httpOnly", False),
+                        "secure": cookie.get("secure", False),
+                        "sameSite": cookie.get("sameSite", "Lax")
+                    }
+                    serializable_cookies.append(serializable_cookie)
+
+                local_storage = {}
+                try:
+                    local_storage_raw = await page.evaluate("() => Object.assign({}, window.localStorage)")
+                    local_storage = {k: str(v) for k, v in local_storage_raw.items() if v is not None}
+                except Exception as e:
+                    logger.warning(f"Could not extract localStorage: {e}")
+
+                return {
+                    "success": False,
+                    "order_id": order_id,
+                    "dishes_added": dishes_added,
+                    "message": f"Successfully added {dishes_added} dish(es), but automation is taking longer than expected ({elapsed:.0f}s). Please review your cart and complete checkout manually.",
+                    "fallback_to_manual": True,
+                    "checkout_url": page.url,
                     "session_cookies": serializable_cookies,
                     "local_storage": local_storage
                 }
