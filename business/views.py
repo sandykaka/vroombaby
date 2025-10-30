@@ -3565,7 +3565,9 @@ def _extract_quick_actions(ai_response, user_profile, user_message, location=Non
             'chinese': 'chinese',
             'mexican': 'mexican',
             'thai': 'thai',
-            'sushi': 'japanese'
+            'sushi': 'japanese',
+            'italian': 'italian',  # NEW: Support Italian cuisine
+            'asian': 'asian'  # NEW: Support generic Asian cuisine
         }
 
         selected_cuisine = None
@@ -3634,7 +3636,9 @@ def _extract_quick_actions(ai_response, user_profile, user_message, location=Non
                     'burger': '🍔',
                     'chinese': '🥡',
                     'thai': '🍜',
-                    'japanese': '🍣'
+                    'japanese': '🍣',
+                    'italian': '🍝',  # NEW: Italian emoji
+                    'asian': '🍜'  # NEW: Generic Asian emoji
                 }
                 emoji = cuisine_emoji_map.get(selected_cuisine, '🍽️')
 
@@ -3683,7 +3687,9 @@ def _extract_quick_actions(ai_response, user_profile, user_message, location=Non
         'thai': '🍜 Thai',
         'mexican': '🌯 Mexican',
         'burger': '🍔 Burgers',
-        'sushi': '🍣 Sushi'
+        'sushi': '🍣 Sushi',
+        'italian': '🍝 Italian',  # NEW: Italian button
+        'asian': '🍜 Asian'  # NEW: Generic Asian button
     }
 
     for keyword, action in cuisine_keywords.items():
