@@ -152,11 +152,12 @@ class DishCustomizationDiscovery:
         cache_path = self._get_cache_path(customization.restaurant_id, customization.dish_name)
 
         try:
+            logger.info(f"Attempting to save cache for {customization.dish_name} to {cache_path}")
             with open(cache_path, 'w') as f:
                 json.dump(customization.to_dict(), f, indent=2)
-            logger.info(f"Cached customization for {customization.dish_name}")
+            logger.info(f"✅ Cached customization for {customization.dish_name}")
         except Exception as e:
-            logger.error(f"Error saving cache for {customization.dish_name}: {e}")
+            logger.error(f"❌ Error saving cache for {customization.dish_name}: {e}", exc_info=True)
 
     async def discover_customizations(
         self,
@@ -228,23 +229,29 @@ class DishCustomizationDiscovery:
                 # Process each dish
                 for dish_name in uncached_dishes:
                     try:
+                        logger.info(f"🔍 Discovering {dish_name}...")
                         customization = await self._discover_single_dish(
                             page, restaurant_id, dish_name
                         )
+
+                        logger.info(f"🔍 Discovery result for {dish_name}: customization={'exists' if customization else 'None'}")
 
                         # Always cache results, even if no customizations found
                         # This prevents expensive AI re-discovery for dishes with no options
                         if customization:
                             results[dish_name] = customization
+                            logger.info(f"🔍 About to save customization for {dish_name}")
                             self.save_customization(customization)
 
                             if customization.groups:
                                 logger.info(f"✅ Successfully discovered customizations for {dish_name} ({len(customization.groups)} groups)")
                             else:
                                 logger.info(f"✅ Cached {dish_name} with no customizations (avoids future AI calls)")
+                        else:
+                            logger.warning(f"⚠️ No customization object returned for {dish_name}")
 
                     except Exception as e:
-                        logger.error(f"Error discovering {dish_name}: {e}")
+                        logger.error(f"Error discovering {dish_name}: {e}", exc_info=True)
                         # Don't save on exception - let it retry next time
 
             finally:
