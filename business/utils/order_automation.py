@@ -243,16 +243,17 @@ async def automate_restaurant_order(
                 except Exception as e:
                     logger.warning(f"Could not extract localStorage: {e}")
 
-                # Use original_url if we hit a modal mismatch (restaurant closed), otherwise use current page.url
-                checkout_url = original_url if modal_mismatch_detected else page.url
-                logger.info(f"📍 Checkout URL: {checkout_url} (original: {modal_mismatch_detected})")
+                # Always return current page URL (not original) so user sees exact state where automation stopped
+                # This includes any modals/popups that blocked automation - user can dismiss and continue
+                checkout_url = page.url
+                logger.info(f"📍 Checkout URL: {checkout_url} (current page state)")
 
                 # Return current page state for manual completion
                 return {
                     "success": False,
                     "order_id": order_id,
                     "dishes_added": 0,  # REQUIRED: iOS decoder needs this field
-                    "message": "Some items may be unavailable. Please review and complete your order manually.",
+                    "message": "Please dismiss any popups and complete your order manually.",
                     "fallback_to_manual": True,
                     "checkout_url": checkout_url,
                     "session_cookies": serializable_cookies,
