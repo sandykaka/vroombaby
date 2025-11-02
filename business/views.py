@@ -3415,6 +3415,9 @@ def _build_home_ai_context(user_profile, nearby_restaurants, location, conversat
     """Build context string for AI prompt"""
     context_parts = []
 
+    # Initialize saved_addresses to empty list (in case user_profile is None)
+    saved_addresses = []
+
     # User profile context
     if user_profile:
         if user_profile.get('is_first_time'):
