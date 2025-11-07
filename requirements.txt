@@ -1,4 +1,5 @@
 Django
+Pillow
 requests
 firebase-admin
 googlemaps
@@ -16,3 +17,4 @@ unidecode
 inflect
 rapidfuzz
 en_core_web_sm
+Pillow

@@ -33,9 +33,23 @@ if not service_account_path:
 
 print(f"Using Firebase service account: {service_account_path}")
 
-# Initialize Firebase Admin.
+# Initialize Firebase Admin for Crave/Ethnopicks (default app)
 cred = credentials.Certificate(service_account_path)
 firebase_admin.initialize_app(cred)
+
+# Initialize Firebase Admin for ShopRight (secondary app)
+shopright_service_account_path = None
+if os.path.exists('/Users/sandeshkakade/gitRepos/vroombaby/shopright_service_account_key.json'):
+    shopright_service_account_path = '/Users/sandeshkakade/gitRepos/vroombaby/shopright_service_account_key.json'
+elif os.path.exists('/home/ubuntu/vroombaby/shopright_service_account_key.json'):
+    shopright_service_account_path = '/home/ubuntu/vroombaby/shopright_service_account_key.json'
+
+if shopright_service_account_path:
+    print(f"Using ShopRight Firebase service account: {shopright_service_account_path}")
+    shopright_cred = credentials.Certificate(shopright_service_account_path)
+    firebase_admin.initialize_app(shopright_cred, name='shopright')
+else:
+    print("Warning: ShopRight Firebase service account not found. ShopRight authentication will not work.")
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'website1.settings')
 application = get_wsgi_application()

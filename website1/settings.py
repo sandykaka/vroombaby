@@ -36,12 +36,17 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1', '172.20.10.2', 'www.vroombaby.com', '
                  'www.schoolconvo.com', 'schoolconvo.com', 'www.coffeewithexpert.com', 'coffeewithexpert.com']
 # ALLOWED_HOSTS = []
 
+# File upload settings for receipt images
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10MB (default is 2.5MB)
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10MB
+
 
 # Application definition
 
 INSTALLED_APPS = [
     'business',
     'vroombaby',
+    'shopright',  # New grocery shopping assistant app
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -140,6 +145,10 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 # The URL to use when referring to static files (where they will be served from)
 STATIC_URL = '/static/'
 
+# Media files (user uploads - receipts, etc.)
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_URL = '/media/'
+
 X_FRAME_OPTIONS = "ALLOW-FROM https://ws-na.amazon-adsystem.com/"
 
 SECURE_SSL_REDIRECT = False  # NGINX handles this
@@ -229,6 +238,11 @@ LOGGING = {
             'propagate': False,
         },
         'business': {
+            'handlers': ['console', 'file_debug'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'shopright': {
             'handlers': ['console', 'file_debug'],
             'level': 'DEBUG',
             'propagate': False,
