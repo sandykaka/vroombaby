@@ -106,10 +106,11 @@ class GroceryItem(models.Model):
 
 
 class ShoppingList(models.Model):
-    """Shopping list for a user or family (one per store)"""
+    """Shopping list for a user or family (one per store location)"""
     family = models.ForeignKey(Family, on_delete=models.CASCADE, related_name='shopping_lists', null=True, blank=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='personal_shopping_lists', null=True, blank=True)
-    store_name = models.CharField(max_length=200)  # Which store to shop at
+    store_name = models.CharField(max_length=200)  # Which store chain (e.g., "Trader Joe's")
+    store_location = models.CharField(max_length=200, blank=True, default='')  # Specific address (e.g., "123 Main St, SF")
 
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_lists')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -118,25 +119,26 @@ class ShoppingList(models.Model):
     is_active = models.BooleanField(default=True)  # Can archive completed lists
 
     class Meta:
-        # Ensure one list per store per family OR per user
+        # Ensure one list per store LOCATION per family OR per user
         constraints = [
             models.UniqueConstraint(
-                fields=['family', 'store_name'],
+                fields=['family', 'store_name', 'store_location'],
                 condition=models.Q(family__isnull=False),
-                name='unique_family_store'
+                name='unique_family_store_location'
             ),
             models.UniqueConstraint(
-                fields=['user', 'store_name'],
+                fields=['user', 'store_name', 'store_location'],
                 condition=models.Q(user__isnull=False, family__isnull=True),
-                name='unique_user_store'
+                name='unique_user_store_location'
             ),
         ]
 
     def __str__(self):
+        store_display = f"{self.store_name} - {self.store_location}" if self.store_location else self.store_name
         if self.family:
-            return f"{self.family.name} - {self.store_name} ({self.list_items.count()} items)"
+            return f"{self.family.name} - {store_display} ({self.list_items.count()} items)"
         else:
-            return f"{self.user.username} - {self.store_name} ({self.list_items.count()} items)"
+            return f"{self.user.username} - {store_display} ({self.list_items.count()} items)"
 
     @property
     def checked_count(self):

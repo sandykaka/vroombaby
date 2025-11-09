@@ -241,10 +241,10 @@ def scan_receipt_api(request):
 
     # Auto-add items to shopping list (personal or family)
     if family:
-        _update_shopping_list_from_trip(family, None, store_name, parsed_items, trip_date)
+        _update_shopping_list_from_trip(family, None, store_name, store_location, parsed_items, trip_date)
         logger.info(f"Updated shopping list for family: {family.name}")
     else:
-        _update_shopping_list_from_trip(None, request.user, store_name, parsed_items, trip_date)
+        _update_shopping_list_from_trip(None, request.user, store_name, store_location, parsed_items, trip_date)
         logger.info(f"Updated personal shopping list for user: {request.user.username}")
 
     # Build receipt image URL
@@ -450,7 +450,7 @@ def _update_grocery_items(items_list, store_name):
         grocery_item.save(update_fields=['times_purchased'])
 
 
-def _update_shopping_list_from_trip(family, user, store_name, items_list, trip_date):
+def _update_shopping_list_from_trip(family, user, store_name, store_location, items_list, trip_date):
     """
     Update shopping list after receipt upload (works for both family and personal lists):
     1. Remove all checked items (things that were supposed to be bought - clear for next cycle)
@@ -465,12 +465,13 @@ def _update_shopping_list_from_trip(family, user, store_name, items_list, trip_d
     - New items added for review
     - Unchecked items updated but kept (user's choice to skip)
     """
-    # Get or create shopping list for this store (family or personal)
+    # Get or create shopping list for this store LOCATION (family or personal)
     if family:
         shopping_list, created = ShoppingList.objects.get_or_create(
             family=family,
             user=None,
             store_name=store_name,
+            store_location=store_location,
             defaults={'created_by': family.members.first().user if family.members.exists() else None}
         )
     else:
@@ -478,10 +479,12 @@ def _update_shopping_list_from_trip(family, user, store_name, items_list, trip_d
             family=None,
             user=user,
             store_name=store_name,
+            store_location=store_location,
             defaults={'created_by': user}
         )
 
-    logger.info(f"{'Created' if created else 'Found'} shopping list for {store_name}")
+    store_display = f"{store_name} - {store_location}" if store_location else store_name
+    logger.info(f"{'Created' if created else 'Found'} shopping list for {store_display}")
 
     # STEP 1: Clear all checked items (items that were marked "want to buy")
     checked_count = shopping_list.list_items.filter(is_checked=True).count()
@@ -1147,6 +1150,7 @@ def shopping_lists_api(request):
         {
             'id': lst.id,
             'store_name': lst.store_name,
+            'store_location': lst.store_location or '',
             'item_count': lst.total_count,
             'checked_count': lst.checked_count,
             'created_at': lst.created_at.isoformat(),
@@ -1243,6 +1247,7 @@ def shopping_list_detail_api(request, list_id):
             'list': {
                 'id': lst.id,
                 'store_name': lst.store_name,
+                'store_location': lst.store_location or '',
                 'item_count': lst.total_count,
                 'checked_count': lst.checked_count,
                 'items': enriched_items
@@ -1296,6 +1301,7 @@ def shopping_list_detail_api(request, list_id):
             'list': {
                 'id': lst.id,
                 'store_name': lst.store_name,
+                'store_location': lst.store_location or '',
                 'items': [
                     {
                         'id': item.id,
@@ -1829,11 +1835,12 @@ def flagged_images_api(request):
 @require_firebase_auth
 def add_location_api(request):
     """
-    Add location for a grocery item
+    Add location for a grocery item at a specific store location
 
     POST /shopright/api/location/add/
     Body: {
         "grocery_item_id": 123,
+        "store_location": "123 Main St, SF",  # specific physical store address
         "location_type": "aisle",  # or "relative", "category"
         "aisle_number": "10",  # for aisle type
         "bay_number": "3",  # optional, for aisle type
@@ -1865,12 +1872,20 @@ def add_location_api(request):
 
     grocery_item_id = data.get('grocery_item_id')
     location_type = data.get('location_type', 'aisle')
+    store_location = data.get('store_location', '').strip()
 
     if not grocery_item_id:
         return JsonResponse({
             'success': False,
             'error': 'Missing grocery_item_id',
             'message': 'Missing grocery_item_id'
+        }, status=400)
+
+    if not store_location:
+        return JsonResponse({
+            'success': False,
+            'error': 'Missing store_location',
+            'message': 'Missing store_location - need specific store address'
         }, status=400)
 
     try:
@@ -1905,12 +1920,13 @@ def add_location_api(request):
         aisle_number = ''
         bay_number = ''
 
-    # Check if this EXACT location already exists for this item at this store
+    # Check if this EXACT location already exists for this item at this store LOCATION
     # (Allow multiple different locations, but prevent exact duplicates)
     if location_type == 'aisle':
         existing_location = AisleLocation.objects.filter(
             grocery_item=grocery_item,
             store_name=store_name,
+            store_location=store_location,
             location_type='aisle',
             aisle_number=aisle_number,
             bay_number=bay_number
@@ -1919,6 +1935,7 @@ def add_location_api(request):
         existing_location = AisleLocation.objects.filter(
             grocery_item=grocery_item,
             store_name=store_name,
+            store_location=store_location,
             location_type=location_type,
             location_description=data.get('location_description', '')
         ).first()
@@ -1940,7 +1957,7 @@ def add_location_api(request):
     location = AisleLocation.objects.create(
         grocery_item=grocery_item,
         store_name=store_name,
-        store_location='',  # Can be enhanced to get from grocery_item context
+        store_location=store_location,
         location_type=location_type,
         aisle_number=aisle_number if location_type == 'aisle' else '',
         bay_number=bay_number if location_type == 'aisle' else '',
@@ -1952,12 +1969,13 @@ def add_location_api(request):
     # Creator automatically upvotes their own location
     LocationVote.objects.create(location=location, user=request.user, vote_type='up')
 
-    logger.info(f"📍 NEW location added: {grocery_item.name} → {location.get_display_location()} at {store_name} by {request.user.username}")
+    logger.info(f"📍 NEW location added: {grocery_item.name} → {location.get_display_location()} at {store_name} - {store_location} by {request.user.username}")
 
-    # Count how many families will benefit (same item at same store)
+    # Count how many families will benefit (same item at same store LOCATION)
     potential_matches = ShoppingListItem.objects.filter(
         grocery_item=grocery_item,
-        shopping_list__store_name=store_name
+        shopping_list__store_name=store_name,
+        shopping_list__store_location=store_location
     ).exclude(shopping_list__family__isnull=True)
 
     families_helped = potential_matches.values('shopping_list__family').distinct().count()
@@ -2127,9 +2145,9 @@ def vote_location_api(request):
 @require_firebase_auth
 def get_location_api(request, grocery_item_id):
     """
-    Get best location for a grocery item at a specific store
+    Get best location for a grocery item at a specific store location
 
-    GET /shopright/api/location/<grocery_item_id>/?store_name=Trader+Joe's
+    GET /shopright/api/location/<grocery_item_id>/?store_name=Trader+Joe's&store_location=123+Main+St
 
     Returns: {
         "location": {
@@ -2145,6 +2163,7 @@ def get_location_api(request, grocery_item_id):
     or {"location": null} if no location found
     """
     store_name = request.GET.get('store_name')
+    store_location = request.GET.get('store_location', '')
 
     if not store_name:
         return JsonResponse({'error': 'Missing store_name query parameter'}, status=400)
@@ -2154,10 +2173,11 @@ def get_location_api(request, grocery_item_id):
     except GroceryItem.DoesNotExist:
         return JsonResponse({'error': 'Grocery item not found'}, status=404)
 
-    # Get best location (highest net score)
+    # Get best location (highest net score) for this specific store location
     location = AisleLocation.objects.filter(
         grocery_item=grocery_item,
         store_name=store_name,
+        store_location=store_location,
         is_flagged=False  # Don't show flagged locations
     ).order_by('-upvotes', '-last_verified').first()
 
@@ -2189,9 +2209,9 @@ def get_location_api(request, grocery_item_id):
 @require_firebase_auth
 def get_all_locations_api(request, grocery_item_id):
     """
-    Get ALL locations for a grocery item at a specific store (not just the best one)
+    Get ALL locations for a grocery item at a specific store location (not just the best one)
 
-    GET /shopright/api/location/<grocery_item_id>/all/?store_name=Trader+Joe's
+    GET /shopright/api/location/<grocery_item_id>/all/?store_name=Trader+Joe's&store_location=123+Main+St
 
     Returns: {
         "locations": [
@@ -2206,6 +2226,7 @@ def get_all_locations_api(request, grocery_item_id):
     }
     """
     store_name = request.GET.get('store_name')
+    store_location = request.GET.get('store_location', '')
 
     if not store_name:
         return JsonResponse({'error': 'Missing store_name query parameter'}, status=400)
@@ -2215,10 +2236,11 @@ def get_all_locations_api(request, grocery_item_id):
     except GroceryItem.DoesNotExist:
         return JsonResponse({'error': 'Grocery item not found'}, status=404)
 
-    # Get ALL locations for this item at this store (not sorted yet)
+    # Get ALL locations for this item at this specific store location (not sorted yet)
     locations = AisleLocation.objects.filter(
         grocery_item=grocery_item,
         store_name=store_name,
+        store_location=store_location,
         is_flagged=False  # Don't show flagged locations
     )
 
