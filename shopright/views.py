@@ -522,14 +522,37 @@ You are analyzing a grocery store receipt. Extract the following information:
    - name: Product name WITHOUT size/quantity (e.g., "Horizon Organic Whole Milk" NOT "Horizon Organic Whole Milk 64oz")
    - brand: Brand name if visible (e.g., "Horizon")
    - size: Size/quantity ONLY, extracted separately from name (e.g., "64oz", "1 lb", "12 ct")
-   - price: Individual UNIT price (e.g., "1.29" for an item showing "3 @ $1.29")
-   - quantity: Number of units purchased (default is 1 if not specified, e.g., 3 for "3 @ $1.29")
+   - price: ACTUAL AMOUNT PAID for this line item (see detailed rules below)
+   - quantity: Number of units purchased (default is 1 if not specified)
    - category: Best-guess category (e.g., "Dairy", "Produce", "Meat", "Snacks", "Beverages", "Bakery", "Frozen", "Pantry")
+
+   CRITICAL - PRICE EXTRACTION RULES:
+   TWO TYPES OF ITEMS - extract price differently for each:
+
+   TYPE 1 - WEIGHTED ITEMS (produce, deli, meat sold by lb/kg):
+   Format example:
+     Line 1: "Karela per lb    $1.24"
+     Line 2: "0.69 lb @ 1.79/lb"
+   → Extract price: "1.24" (the ACTUAL AMOUNT PAID from Line 1)
+   → Extract size: "0.69 lb" (optional, from Line 2)
+   → Extract quantity: 1
+   → IGNORE the unit price breakdown (1.79/lb) - this is NOT the price paid
+
+   TYPE 2 - QUANTITY ITEMS (packaged items sold in multiples):
+   Format example:
+     Line 1: "Avocado Large Eac    $3.87"
+     Line 2: "3 @ $1.29"
+   → Extract price: "1.29" (unit price per item)
+   → Extract quantity: 3
+   → Total paid is 3 × $1.29 = $3.87
+
+   RULE: If you see BOTH a price on the item line AND a unit price breakdown on next line:
+   - Check if the breakdown shows "lb @", "kg @", or similar WEIGHT units → Use the FIRST price (Type 1)
+   - Check if the breakdown shows a simple quantity "X @" → Use the unit price from breakdown (Type 2)
 
    IMPORTANT GUIDELINES:
    - BE THOROUGH: Scan the ENTIRE receipt carefully. Missing items is NOT acceptable.
    - Keep name and size SEPARATE. Do NOT include size information in the name field.
-   - If an item shows "X @ $Y.YY" on the next line, extract quantity as X and price as Y.YY (the unit price).
    - If no quantity is shown, default quantity to 1.
    - Ignore other numbers below the item line (PLU codes, UPC codes, item numbers).
    - "Eac", "Each", "EA" means the item is sold individually - do NOT include this in size.
@@ -543,10 +566,21 @@ You are analyzing a grocery store receipt. Extract the following information:
    - After extraction, mentally verify that item prices roughly add up to the total shown on receipt
 
    Examples:
-   - Receipt shows "Bananas 1 lb    $2.99" -> name: "Bananas", size: "1 lb", price: "2.99", quantity: 1
-   - Receipt shows "Milk Gallon Whole 64oz    $4.99" -> name: "Milk Gallon Whole", size: "64oz", price: "4.99", quantity: 1
-   - Receipt shows "Avocado Large Eac    $3.87" with "3 @ $1.29" on next line:
-     -> name: "Avocado Large", size: "", price: "1.29", quantity: 3
+   - Receipt shows "Bananas 1 lb    $2.99" → name: "Bananas", size: "1 lb", price: "2.99", quantity: 1
+   - Receipt shows "Milk Gallon Whole 64oz    $4.99" → name: "Milk Gallon Whole", size: "64oz", price: "4.99", quantity: 1
+
+   - Receipt shows:
+     Line 1: "Karela per lb    $1.24"
+     Line 2: "0.69 lb @ 1.79/lb"
+     → name: "Karela per lb", size: "0.69 lb", price: "1.24", quantity: 1
+     (Use $1.24 from Line 1, NOT $1.79 from breakdown)
+
+   - Receipt shows:
+     Line 1: "Avocado Large Eac    $3.87"
+     Line 2: "3 @ $1.29"
+     → name: "Avocado Large", size: "", price: "1.29", quantity: 3
+     (Use $1.29 unit price from Line 2, NOT $3.87 total)
+
    - If receipt shows "Carrots $1.99" on two separate lines, extract as TWO separate items each with quantity: 1
 
 3. Receipt totals:
