@@ -24,6 +24,23 @@ logger = logging.getLogger(__name__)
 # UTILITY FUNCTIONS
 # ========================================
 
+def normalize_store_location(location):
+    """
+    Normalize store location to prevent duplicate shopping lists.
+
+    Examples:
+        "7250 Bollinger Rd, San Jose, CA 95129" → "7250 bollinger rd, san jose, ca 95129"
+        "  123 Main St, Cupertino, CA  " → "123 main st, cupertino, ca"
+
+    Handles: case differences, extra whitespace, zip code variations
+    """
+    if not location:
+        return ""
+
+    # Lowercase, strip, and normalize whitespace
+    return ' '.join(location.strip().lower().split())
+
+
 def fuzzy_match_product_names(selected_item_name, scanned_product_name):
     """
     Simple fuzzy matching to verify user is scanning the correct product.
@@ -209,6 +226,9 @@ def scan_receipt_api(request):
         store_name = user_store_name
     if user_store_location:
         store_location = user_store_location
+
+    # Normalize store location to prevent duplicates (e.g., "CA" vs "ca", extra spaces, etc.)
+    store_location = normalize_store_location(store_location)
 
     # Get user's family (optional - user can use app without family for personal tracking)
     membership = FamilyMember.objects.filter(user=request.user).first()
@@ -465,23 +485,64 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
     - New items added for review
     - Unchecked items updated but kept (user's choice to skip)
     """
+    from django.db import IntegrityError
+
     # Get or create shopping list for this store LOCATION (family or personal)
-    if family:
-        shopping_list, created = ShoppingList.objects.get_or_create(
-            family=family,
-            user=None,
-            store_name=store_name,
-            store_location=store_location,
-            defaults={'created_by': family.members.first().user if family.members.exists() else None}
-        )
-    else:
-        shopping_list, created = ShoppingList.objects.get_or_create(
-            family=None,
-            user=user,
-            store_name=store_name,
-            store_location=store_location,
-            defaults={'created_by': user}
-        )
+    # Handle race condition where list might be created between check and create
+    max_retries = 3
+    shopping_list = None
+    created = False
+
+    for attempt in range(max_retries):
+        try:
+            if family:
+                shopping_list, created = ShoppingList.objects.get_or_create(
+                    family=family,
+                    user=None,
+                    store_name=store_name,
+                    store_location=store_location,
+                    defaults={'created_by': family.members.first().user if family.members.exists() else None}
+                )
+            else:
+                shopping_list, created = ShoppingList.objects.get_or_create(
+                    family=None,
+                    user=user,
+                    store_name=store_name,
+                    store_location=store_location,
+                    defaults={'created_by': user}
+                )
+            break  # Success - exit retry loop
+        except IntegrityError as e:
+            if attempt < max_retries - 1:
+                # Retry - another request probably created it
+                logger.warning(f"Retry {attempt + 1}/{max_retries} for shopping list due to IntegrityError: {e}")
+                import time
+                time.sleep(0.1)  # Brief pause before retry
+                continue
+            else:
+                # Last attempt failed - try one final .get() to retrieve existing
+                logger.error(f"Failed get_or_create after {max_retries} attempts, trying final .get()")
+                try:
+                    if family:
+                        shopping_list = ShoppingList.objects.get(
+                            family=family,
+                            user=None,
+                            store_name=store_name,
+                            store_location=store_location
+                        )
+                    else:
+                        shopping_list = ShoppingList.objects.get(
+                            family=None,
+                            user=user,
+                            store_name=store_name,
+                            store_location=store_location
+                        )
+                    created = False
+                    logger.info(f"✅ Retrieved existing shopping list on final attempt")
+                except ShoppingList.DoesNotExist:
+                    # Shouldn't happen, but log and re-raise original error
+                    logger.error(f"❌ Shopping list doesn't exist even after IntegrityError!")
+                    raise e
 
     store_display = f"{store_name} - {store_location}" if store_location else store_name
     logger.info(f"{'Created' if created else 'Found'} shopping list for {store_display}")
@@ -1874,6 +1935,9 @@ def add_location_api(request):
     location_type = data.get('location_type', 'aisle')
     store_location = data.get('store_location', '').strip()
 
+    # Normalize store location for consistent matching
+    store_location = normalize_store_location(store_location)
+
     if not grocery_item_id:
         return JsonResponse({
             'success': False,
@@ -2165,6 +2229,9 @@ def get_location_api(request, grocery_item_id):
     store_name = request.GET.get('store_name')
     store_location = request.GET.get('store_location', '')
 
+    # Normalize store location for consistent matching
+    store_location = normalize_store_location(store_location)
+
     if not store_name:
         return JsonResponse({'error': 'Missing store_name query parameter'}, status=400)
 
@@ -2227,6 +2294,9 @@ def get_all_locations_api(request, grocery_item_id):
     """
     store_name = request.GET.get('store_name')
     store_location = request.GET.get('store_location', '')
+
+    # Normalize store location for consistent matching
+    store_location = normalize_store_location(store_location)
 
     if not store_name:
         return JsonResponse({'error': 'Missing store_name query parameter'}, status=400)
