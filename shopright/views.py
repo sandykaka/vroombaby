@@ -535,6 +535,13 @@ You are analyzing a grocery store receipt. Extract the following information:
    - "Eac", "Each", "EA" means the item is sold individually - do NOT include this in size.
    - Look for items throughout the ENTIRE receipt, including items at the top, middle, and bottom of the list.
 
+   CRITICAL - PRICE ACCURACY:
+   - DOUBLE-CHECK every price carefully. Price accuracy is CRITICAL.
+   - Be extremely careful with similar-looking digits: 7 vs 9, 0 vs 8, 1 vs 7, 5 vs 6, 3 vs 8
+   - If a price looks unclear, examine the context (nearby prices, item type, receipt layout) to determine the correct value
+   - Verify your extracted prices are reasonable for grocery items (e.g., $4.79 is more common than $4.99 for some items)
+   - After extraction, mentally verify that item prices roughly add up to the total shown on receipt
+
    Examples:
    - Receipt shows "Bananas 1 lb    $2.99" -> name: "Bananas", size: "1 lb", price: "2.99", quantity: 1
    - Receipt shows "Milk Gallon Whole 64oz    $4.99" -> name: "Milk Gallon Whole", size: "64oz", price: "4.99", quantity: 1
