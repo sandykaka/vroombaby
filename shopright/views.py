@@ -473,17 +473,21 @@ def _update_grocery_items(items_list, store_name):
 def _update_shopping_list_from_trip(family, user, store_name, store_location, items_list, trip_date):
     """
     Update shopping list after receipt upload (works for both family and personal lists):
-    1. Remove all checked items (things that were supposed to be bought - clear for next cycle)
-    2. Add new items from receipt as checked (for review)
-    3. Update unchecked items if they appear in receipt (price/date tracking only)
+    1. Clear "Already Got" items (checked items from last week - user bought them)
+    2. Add new receipt items as "Need to Buy" (unchecked - ready for this week)
+    3. Keep items user deliberately unchecked (things they decided not to buy)
     4. Auto-link items to store-specific GroceryItem database
 
-    Flow:
-    - User marks items to buy (checked=True)
-    - User shops and uploads receipt
-    - Checked items are cleared (bought)
-    - New items added for review
-    - Unchecked items updated but kept (user's choice to skip)
+    Workflow:
+    Week 1:
+    - Upload receipt → items added as "Need to Buy" (unchecked)
+    - Family reviews, checks items they don't want
+    - During shopping → check off items as you buy them → moves to "Already Got"
+
+    Week 2:
+    - Upload new receipt → clears "Already Got" section (last week's items)
+    - New items added to "Need to Buy"
+    - Keeps any unchecked items (things family decided not to buy)
     """
     from django.db import IntegrityError
 
@@ -547,11 +551,11 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
     store_display = f"{store_name} - {store_location}" if store_location else store_name
     logger.info(f"{'Created' if created else 'Found'} shopping list for {store_display}")
 
-    # STEP 1: Clear all checked items (items that were marked "want to buy")
+    # STEP 1: Clear "Already Got" items (things user bought last week)
     checked_count = shopping_list.list_items.filter(is_checked=True).count()
     if checked_count > 0:
         shopping_list.list_items.filter(is_checked=True).delete()
-        logger.info(f"🗑️ Cleared {checked_count} checked items from {store_name} list (items were bought)")
+        logger.info(f"🗑️ Cleared {checked_count} 'Already Got' items from {store_name} list (bought last week)")
 
     # STEP 2: Process receipt items
     added_count = 0
@@ -593,25 +597,25 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
         grocery_item.times_purchased += 1
         grocery_item.save(update_fields=['times_purchased'])
 
-        # STEP 2B: Try to find existing unchecked item (exact match on name+brand+size)
-        existing_unchecked_item = shopping_list.list_items.filter(
+        # STEP 2B: Try to find existing item still in "Need to Buy" (not bought yet)
+        existing_item = shopping_list.list_items.filter(
             name=name,
             brand=brand,
             size=size,
-            is_checked=False  # Only match items that were deliberately unchecked (don't want to buy)
+            is_checked=False  # Items still in "Need to Buy" from previous weeks
         ).first()
 
-        if existing_unchecked_item:
-            # Item exists but was unchecked (wife said "don't buy") - just update tracking info
-            existing_unchecked_item.price = price
-            existing_unchecked_item.last_purchased_date = trip_date
-            existing_unchecked_item.purchase_count += 1
-            existing_unchecked_item.grocery_item = grocery_item  # Link to global item
-            existing_unchecked_item.save(update_fields=['price', 'last_purchased_date', 'purchase_count', 'grocery_item'])
+        if existing_item:
+            # Item already exists in "Need to Buy" - just update price/tracking info
+            existing_item.price = price
+            existing_item.last_purchased_date = trip_date
+            existing_item.purchase_count += 1
+            existing_item.grocery_item = grocery_item  # Link to global item
+            existing_item.save(update_fields=['price', 'last_purchased_date', 'purchase_count', 'grocery_item'])
             updated_count += 1
-            logger.info(f"📊 Updated unchecked item: {name} (was on list but marked as don't buy)")
+            logger.info(f"📊 Updated existing 'Need to Buy' item: {name}")
         else:
-            # New item or was previously checked (now removed) - add as checked for review
+            # New item - add to "Need to Buy" list (unchecked)
             ShoppingListItem.objects.create(
                 shopping_list=shopping_list,
                 name=name,
@@ -620,7 +624,7 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
                 price=price,
                 category=category,
                 quantity=1,
-                is_checked=True,  # Default checked = ready for family to review
+                is_checked=False,  # Start as "Need to Buy" (unchecked)
                 last_purchased_date=trip_date,
                 purchase_count=1,
                 grocery_item=grocery_item  # Link to global item
