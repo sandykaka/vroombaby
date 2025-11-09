@@ -524,28 +524,33 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
                 time.sleep(0.1)  # Brief pause before retry
                 continue
             else:
-                # Last attempt failed - try one final .get() to retrieve existing
-                logger.error(f"Failed get_or_create after {max_retries} attempts, trying final .get()")
+                # Last attempt failed - try case-insensitive search to retrieve existing
+                logger.error(f"Failed get_or_create after {max_retries} attempts, trying case-insensitive search")
                 try:
                     if family:
-                        shopping_list = ShoppingList.objects.get(
+                        shopping_list = ShoppingList.objects.filter(
                             family=family,
-                            user=None,
-                            store_name=store_name,
-                            store_location=store_location
-                        )
+                            user__isnull=True,
+                            store_name__iexact=store_name,  # Case-insensitive
+                            store_location__iexact=store_location  # Case-insensitive
+                        ).first()
                     else:
-                        shopping_list = ShoppingList.objects.get(
-                            family=None,
+                        shopping_list = ShoppingList.objects.filter(
+                            family__isnull=True,
                             user=user,
-                            store_name=store_name,
-                            store_location=store_location
-                        )
-                    created = False
-                    logger.info(f"✅ Retrieved existing shopping list on final attempt")
-                except ShoppingList.DoesNotExist:
-                    # Shouldn't happen, but log and re-raise original error
-                    logger.error(f"❌ Shopping list doesn't exist even after IntegrityError!")
+                            store_name__iexact=store_name,  # Case-insensitive
+                            store_location__iexact=store_location  # Case-insensitive
+                        ).first()
+
+                    if shopping_list:
+                        created = False
+                        logger.info(f"✅ Retrieved existing shopping list via case-insensitive search")
+                    else:
+                        # Shouldn't happen, but log and re-raise original error
+                        logger.error(f"❌ Shopping list doesn't exist even after IntegrityError!")
+                        raise e
+                except Exception as search_error:
+                    logger.error(f"❌ Final search failed: {search_error}")
                     raise e
 
     store_display = f"{store_name} - {store_location}" if store_location else store_name
