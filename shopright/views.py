@@ -510,6 +510,10 @@ You are analyzing a grocery store receipt. Extract the following information:
    - store_location: Store address or location (e.g., "123 Main St, Cupertino, CA")
 
 2. All items purchased:
+
+   CRITICAL: Extract EVERY SINGLE LINE ITEM from the receipt. Scan the ENTIRE receipt carefully from top to bottom.
+   Do NOT skip ANY items. Count each line carefully to ensure you capture everything.
+
    Extract EACH LINE ITEM as it appears on the receipt.
    If the same product appears on multiple separate lines, include it multiple times.
    If one line shows a quantity (e.g., "3 @ $1.29"), extract it as ONE item with that quantity.
@@ -523,11 +527,13 @@ You are analyzing a grocery store receipt. Extract the following information:
    - category: Best-guess category (e.g., "Dairy", "Produce", "Meat", "Snacks", "Beverages", "Bakery", "Frozen", "Pantry")
 
    IMPORTANT GUIDELINES:
+   - BE THOROUGH: Scan the ENTIRE receipt carefully. Missing items is NOT acceptable.
    - Keep name and size SEPARATE. Do NOT include size information in the name field.
    - If an item shows "X @ $Y.YY" on the next line, extract quantity as X and price as Y.YY (the unit price).
    - If no quantity is shown, default quantity to 1.
    - Ignore other numbers below the item line (PLU codes, UPC codes, item numbers).
    - "Eac", "Each", "EA" means the item is sold individually - do NOT include this in size.
+   - Look for items throughout the ENTIRE receipt, including items at the top, middle, and bottom of the list.
 
    Examples:
    - Receipt shows "Bananas 1 lb    $2.99" -> name: "Bananas", size: "1 lb", price: "2.99", quantity: 1
@@ -538,6 +544,8 @@ You are analyzing a grocery store receipt. Extract the following information:
 
 3. Receipt totals:
    - total_amount: Total amount paid (final total after tax)
+
+BEFORE returning your response, double-check that you've captured EVERY item on the receipt.
 
 Return ONLY a valid JSON object with this structure:
 {
@@ -569,7 +577,7 @@ If you cannot determine a field, use empty string "" for text fields or 1 for qu
                     ]
                 }
             ],
-            max_tokens=2000,
+            max_tokens=4000,  # Increased for receipts with many items (26+ items need ~3000+ tokens)
             temperature=0.1  # Low temperature for consistency
         )
 
