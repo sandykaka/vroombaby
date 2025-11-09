@@ -41,6 +41,49 @@ def normalize_store_location(location):
     return ' '.join(location.strip().lower().split())
 
 
+def normalize_weighted_item_size(size):
+    """
+    Normalize size for weighted items (produce, deli, meat) so different weights match.
+
+    Examples:
+        "0.69 lb" → "per lb"
+        "2.00 lb" → "per lb"
+        "1.5 kg" → "per kg"
+        "64oz" → "64oz" (not weighted, unchanged)
+        "" → ""
+
+    This allows all purchases of the same weighted product (regardless of actual weight)
+    to share the same GroceryItem record for images/locations.
+    """
+    if not size:
+        return ""
+
+    size_lower = size.strip().lower()
+
+    # Check for weight patterns: "X.XX lb", "X lb", "X.XX kg", etc.
+    import re
+
+    # Pattern: optional number + space + weight unit
+    # Matches: "0.69 lb", "2 lb", "1.5 kg", "0.5 lbs", etc.
+    weight_pattern = r'^\d+\.?\d*\s*(lb|lbs|kg|kgs|oz|pound|pounds)$'
+
+    if re.match(weight_pattern, size_lower):
+        # Extract the unit (lb, kg, oz, etc.)
+        unit_match = re.search(r'(lb|lbs|kg|kgs|oz|pound|pounds)$', size_lower)
+        if unit_match:
+            unit = unit_match.group(1)
+            # Normalize unit variations
+            if unit in ['lb', 'lbs', 'pound', 'pounds']:
+                return 'per lb'
+            elif unit in ['kg', 'kgs']:
+                return 'per kg'
+            elif unit == 'oz':
+                return 'per oz'
+
+    # Not a weighted item - return as-is
+    return size
+
+
 def fuzzy_match_product_names(selected_item_name, scanned_product_name):
     """
     Simple fuzzy matching to verify user is scanning the correct product.
@@ -705,11 +748,14 @@ def _update_grocery_items(items_list, store_name):
         size = item_data.get('size', '').strip()
         category = item_data.get('category', '').strip()
 
-        # Get or create store-specific grocery item
+        # Normalize size for weighted items (e.g., "0.69 lb" → "per lb")
+        normalized_size = normalize_weighted_item_size(size)
+
+        # Get or create store-specific grocery item (using normalized size)
         grocery_item, created = GroceryItem.objects.get_or_create(
             name=name,
             brand=brand,
-            size=size,
+            size=normalized_size,  # Use normalized size for matching
             store_name=store_name,
             defaults={'category': category}
         )
@@ -826,24 +872,27 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
         price = item_data.get('price', '').strip()
         category = item_data.get('category', '').strip()
 
-        # STEP 2A: Find or create store-specific GroceryItem
+        # Normalize size for weighted items when matching GroceryItem
+        normalized_size = normalize_weighted_item_size(size)
+
+        # STEP 2A: Find or create store-specific GroceryItem (using normalized size)
         grocery_item = GroceryItem.objects.filter(
             name__iexact=name,
             brand__iexact=brand,
-            size__iexact=size,
+            size__iexact=normalized_size,  # Use normalized size for matching
             store_name=store_name  # Filter by store!
         ).first()
 
         if not grocery_item:
-            # Create new store-specific grocery item
+            # Create new store-specific grocery item (with normalized size)
             grocery_item = GroceryItem.objects.create(
                 name=name,
                 brand=brand,
-                size=size,
+                size=normalized_size,  # Store normalized size
                 category=category,
                 store_name=store_name
             )
-            logger.info(f"🆕 Created store-specific GroceryItem: {name} @ {store_name}")
+            logger.info(f"🆕 Created store-specific GroceryItem: {name} @ {store_name} (size: {normalized_size})")
         else:
             linked_count += 1
 
@@ -852,10 +901,11 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
         grocery_item.save(update_fields=['times_purchased'])
 
         # STEP 2B: Try to find existing item still in "Need to Buy" (not bought yet)
+        # Note: We match on NORMALIZED size here too, so weighted items don't duplicate
         existing_item = shopping_list.list_items.filter(
             name=name,
             brand=brand,
-            size=size,
+            size=normalized_size,  # Use normalized size for matching
             is_checked=False  # Items still in "Need to Buy" from previous weeks
         ).first()
 
@@ -874,7 +924,7 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
                 shopping_list=shopping_list,
                 name=name,
                 brand=brand,
-                size=size,
+                size=normalized_size,  # Store normalized size
                 price=price,
                 category=category,
                 quantity=1,
@@ -1950,19 +2000,23 @@ def upload_product_photo_api(request):
         # List item not linked yet - try to find or create for THIS STORE
         logger.info(f"📸 List item '{list_item.name}' not linked, searching for grocery_item at {store_name}")
 
-        # Try exact match for this store first
+        # Normalize size for matching
+        normalized_size = normalize_weighted_item_size(list_item.size or '')
+
+        # Try exact match for this store first (with normalized size)
         grocery_item = GroceryItem.objects.filter(
             name__iexact=list_item.name,
+            size__iexact=normalized_size,
             store_name=store_name
         ).first()
 
         if not grocery_item:
-            # Not found - create new store-specific grocery item
-            logger.info(f"📸 Creating new grocery_item for '{list_item.name}' at {store_name}")
+            # Not found - create new store-specific grocery item (with normalized size)
+            logger.info(f"📸 Creating new grocery_item for '{list_item.name}' at {store_name} (size: {normalized_size})")
             grocery_item = GroceryItem.objects.create(
                 name=list_item.name,
                 brand=list_item.brand or '',
-                size=list_item.size or '',
+                size=normalized_size,  # Store normalized size
                 category=list_item.category or '',
                 store_name=store_name
             )
