@@ -4,8 +4,9 @@ from . import views
 app_name = 'shopright'
 
 urlpatterns = [
-    # Receipt Scanning
-    path('api/scan-receipt/', views.scan_receipt_api, name='scan_receipt'),
+    # Receipt Scanning (2-step flow)
+    path('api/preview-receipt/', views.preview_receipt_api, name='preview_receipt'),  # Step 1: Parse only
+    path('api/save-receipt/', views.save_receipt_api, name='save_receipt'),  # Step 2: Save parsed data
 
     # Shopping History
     path('api/shopping-history/', views.shopping_history_api, name='shopping_history'),

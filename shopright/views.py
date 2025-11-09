@@ -289,6 +289,206 @@ def scan_receipt_api(request):
     return JsonResponse(response_data)
 
 
+@csrf_exempt
+@require_firebase_auth
+def preview_receipt_api(request):
+    """
+    Preview receipt parsing WITHOUT saving to database (Step 1 of 2-step flow)
+
+    POST /shopright/api/preview-receipt/
+    Body: {
+        "receipt_image": "base64_encoded_image"
+    }
+
+    Returns: {
+        "store_name": "Trader Joe's",
+        "store_location": "7250 Bollinger Rd, San Jose, CA 95129",
+        "items": [...],
+        "calculated_total": "63.54",
+        "receipt_total": "69.24",
+        "totals_match": false,
+        "item_count": 19
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    receipt_image_b64 = data.get('receipt_image')
+    if not receipt_image_b64:
+        return JsonResponse({'error': 'Missing receipt_image'}, status=400)
+
+    # Call OpenAI Vision API to parse receipt
+    try:
+        store_name, store_location, parsed_items, ai_total_amount = _parse_receipt_with_openai(receipt_image_b64)
+    except Exception as e:
+        logger.error(f"OpenAI receipt parsing failed: {e}")
+        return JsonResponse({'error': f'Failed to parse receipt: {str(e)}'}, status=500)
+
+    # Calculate total from item prices
+    calculated_total = 0.0
+    for item in parsed_items:
+        price_str = item.get('price', '').strip()
+        quantity = item.get('quantity', 1)
+        if price_str:
+            try:
+                unit_price = float(price_str.replace('$', '').replace(',', ''))
+                calculated_total += unit_price * quantity
+            except ValueError:
+                logger.warning(f"Could not parse item price: {price_str}")
+
+    # Compare totals
+    total_matches = False
+    if ai_total_amount and calculated_total > 0:
+        difference = abs(ai_total_amount - calculated_total)
+        total_matches = difference <= 0.01
+
+    # Normalize store location
+    store_location = normalize_store_location(store_location)
+
+    response_data = {
+        'store_name': store_name,
+        'store_location': store_location or '',
+        'items': parsed_items,
+        'calculated_total': str(calculated_total) if calculated_total > 0 else None,
+        'receipt_total': str(ai_total_amount) if ai_total_amount else None,
+        'totals_match': total_matches,
+        'item_count': len(parsed_items)
+    }
+
+    logger.info(f"Receipt preview: store={store_name}, items={len(parsed_items)}, calculated_total={calculated_total}, totals_match={total_matches}")
+
+    return JsonResponse(response_data)
+
+
+@csrf_exempt
+@require_firebase_auth
+def save_receipt_api(request):
+    """
+    Save parsed receipt data to database (Step 2 of 2-step flow)
+
+    POST /shopright/api/save-receipt/
+    Body: {
+        "receipt_image": "base64_encoded_image",
+        "store_name": "Trader Joe's",
+        "store_location": "7250 Bollinger Rd, San Jose, CA 95129",
+        "items": [...],
+        "total_amount": "63.54",
+        "trip_date": "2025-11-09T19:51:30"  # optional, defaults to now
+    }
+
+    Returns: {
+        "id": 123,
+        "store_name": "Trader Joe's",
+        "store_location": "...",
+        "items": [...],
+        "total_amount": "63.54",
+        "receipt_image_url": "..."
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    # Validate required fields
+    receipt_image_b64 = data.get('receipt_image')
+    store_name = data.get('store_name', '').strip()
+    parsed_items = data.get('items', [])
+
+    if not receipt_image_b64:
+        return JsonResponse({'error': 'Missing receipt_image'}, status=400)
+    if not store_name:
+        return JsonResponse({'error': 'Missing store_name'}, status=400)
+    if not parsed_items:
+        return JsonResponse({'error': 'Missing items'}, status=400)
+
+    # Optional fields
+    store_location = normalize_store_location(data.get('store_location', ''))
+    trip_date_str = data.get('trip_date')
+
+    # Parse trip date
+    if trip_date_str:
+        try:
+            trip_date = datetime.fromisoformat(trip_date_str.replace('Z', '+00:00'))
+        except ValueError:
+            return JsonResponse({'error': 'Invalid trip_date format'}, status=400)
+    else:
+        trip_date = datetime.now()
+
+    # Parse total amount
+    total_str = data.get('total_amount', '').strip()
+    total_amount = None
+    if total_str:
+        try:
+            total_amount = float(total_str.replace('$', '').replace(',', ''))
+        except ValueError:
+            logger.warning(f"Could not parse total_amount: {total_str}")
+
+    # Get user's family
+    membership = FamilyMember.objects.filter(user=request.user).first()
+    family = membership.family if membership else None
+
+    # Save receipt image
+    from django.core.files.base import ContentFile
+    image_data = base64.b64decode(receipt_image_b64)
+
+    # Create ShoppingTrip
+    trip = ShoppingTrip.objects.create(
+        user=request.user,
+        family=family,
+        store_name=store_name,
+        store_location=store_location,
+        items=parsed_items,
+        total_amount=total_amount,
+        trip_date=trip_date
+    )
+
+    # Save image with trip ID
+    trip.receipt_image.save(
+        f'receipt_{trip.id}.jpg',
+        ContentFile(image_data),
+        save=True
+    )
+
+    # Update GroceryItem master list
+    _update_grocery_items(parsed_items, store_name)
+
+    # Update shopping list
+    if family:
+        _update_shopping_list_from_trip(family, None, store_name, store_location, parsed_items, trip_date)
+        logger.info(f"Updated shopping list for family: {family.name}")
+    else:
+        _update_shopping_list_from_trip(None, request.user, store_name, store_location, parsed_items, trip_date)
+        logger.info(f"Updated personal shopping list for user: {request.user.username}")
+
+    # Build response
+    receipt_image_url = request.build_absolute_uri(trip.receipt_image.url) if trip.receipt_image else None
+
+    response_data = {
+        'id': trip.id,
+        'store_name': trip.store_name,
+        'store_location': trip.store_location or '',
+        'trip_date': trip.trip_date.isoformat(),
+        'items': parsed_items,
+        'total_amount': str(trip.total_amount) if trip.total_amount else None,
+        'item_count': len(parsed_items),
+        'shopped_by': request.user.username,
+        'receipt_image_url': receipt_image_url
+    }
+
+    logger.info(f"Receipt saved: trip_id={trip.id}, store={trip.store_name}, items={len(parsed_items)}")
+
+    return JsonResponse(response_data)
+
+
 def _parse_receipt_with_openai(receipt_image_b64):
     """
     Parse receipt image using OpenAI Vision API (gpt-4o)
