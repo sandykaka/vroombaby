@@ -24,6 +24,7 @@ urlpatterns = [
     path('api/shopping-lists/', views.shopping_lists_api, name='shopping_lists'),
     path('api/shopping-list/<int:list_id>/', views.shopping_list_detail_api, name='shopping_list_detail'),
     path('api/shopping-list-item/<int:item_id>/', views.delete_list_item_api, name='delete_list_item'),
+    path('api/search-items/', views.search_grocery_items_api, name='search_items'),  # Autocomplete for adding items
 
     # Barcode Scanning
     path('api/scan-barcode/', views.scan_barcode_api, name='scan_barcode'),

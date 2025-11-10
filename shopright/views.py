@@ -2711,3 +2711,92 @@ def report_wrong_location_api(request):
         'flagged': location.is_flagged,
         'message': 'Thank you for reporting. We\'ll review this location.' if not location.is_flagged else 'Location has been hidden due to multiple reports.'
     })
+
+
+# ========================================
+# SEARCH GROCERY ITEMS API
+# ========================================
+
+@require_firebase_auth
+def search_grocery_items_api(request):
+    """
+    Search GroceryItem database for autocomplete when adding new items
+    Returns products from past receipts across ALL locations of the specified store chain
+
+    GET /shopright/api/search-items/?store_name=Trader+Joe's&query=milk&limit=10
+
+    Query params:
+    - store_name: Store chain name (e.g., "Trader Joe's")
+    - query: Search text (minimum 2 characters)
+    - limit: Max results to return (default: 10, max: 20)
+
+    Returns: {
+        "items": [
+            {
+                "id": 123,
+                "name": "Organic Whole Milk",
+                "brand": "Horizon",
+                "size": "64oz",
+                "category": "Dairy",
+                "price": null,
+                "image_url": "/media/products/...",
+                "times_purchased": 15
+            },
+            ...
+        ],
+        "count": 5,
+        "query": "milk",
+        "store_name": "Trader Joe's"
+    }
+    """
+    store_name = request.GET.get('store_name', '').strip()
+    query = request.GET.get('query', '').strip()
+    limit = min(int(request.GET.get('limit', 10)), 20)  # Cap at 20 results
+
+    # Validate input
+    if not store_name:
+        return JsonResponse({
+            'items': [],
+            'count': 0,
+            'error': 'Missing store_name parameter'
+        }, status=400)
+
+    if not query or len(query) < 2:
+        return JsonResponse({
+            'items': [],
+            'count': 0,
+            'query': query,
+            'store_name': store_name,
+            'message': 'Query must be at least 2 characters' if query else 'No query provided'
+        })
+
+    # Search across ALL locations of this store chain
+    # Order by popularity (times_purchased) to show most common items first
+    items = GroceryItem.objects.filter(
+        store_name__iexact=store_name,  # Case-insensitive store name match
+        name__icontains=query  # Case-insensitive name search
+    ).order_by('-times_purchased', 'name')[:limit]
+
+    logger.info(f"🔍 Search: store='{store_name}', query='{query}', found {items.count()} items")
+
+    # Serialize results
+    items_data = []
+    for item in items:
+        item_dict = {
+            'id': item.id,
+            'name': item.name,
+            'brand': item.brand or '',
+            'size': item.size or '',
+            'category': item.category or '',
+            'price': None,  # Don't include price in autocomplete (varies by time/location)
+            'image_url': request.build_absolute_uri(item.image_url) if item.image_url else '',
+            'times_purchased': item.times_purchased
+        }
+        items_data.append(item_dict)
+
+    return JsonResponse({
+        'items': items_data,
+        'count': len(items_data),
+        'query': query,
+        'store_name': store_name
+    })
