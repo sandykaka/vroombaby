@@ -323,3 +323,156 @@ class LocationVote(models.Model):
     def __str__(self):
         return f"{self.user.username} {self.vote_type}voted {self.location.grocery_item.name}"
 
+
+class ProductRecall(models.Model):
+    """Food and product recalls from FDA, FSIS, and CPSC"""
+    SOURCE_CHOICES = [
+        ('FDA', 'FDA (Food & Drug Administration)'),
+        ('FSIS', 'FSIS (USDA Meat/Poultry)'),
+        ('CPSC', 'CPSC (Consumer Product Safety)'),
+    ]
+
+    CLASSIFICATION_CHOICES = [
+        ('Class I', 'Class I - Serious health hazard'),
+        ('Class II', 'Class II - Moderate health risk'),
+        ('Class III', 'Class III - Minor violation'),
+    ]
+
+    STATUS_CHOICES = [
+        ('Active', 'Active'),
+        ('Closed', 'Closed'),
+        ('Ongoing', 'Ongoing'),
+    ]
+
+    # Source information
+    source = models.CharField(max_length=10, choices=SOURCE_CHOICES, db_index=True)
+    recall_number = models.CharField(max_length=50, unique=True, db_index=True)  # "036-2025", "F-0234-2025"
+
+    # Recall details
+    classification = models.CharField(max_length=20, choices=CLASSIFICATION_CHOICES, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Active', db_index=True)
+    recall_initiation_date = models.DateField()
+    recall_posted_date = models.DateField(db_index=True)
+
+    # Product information
+    product_name = models.CharField(max_length=500, db_index=True)  # "Saint Coxinha Chicken Croquettes"
+    product_description = models.TextField()  # Full detailed description
+    recalling_firm = models.CharField(max_length=200, db_index=True)  # Brand/company name
+
+    # Product identifiers (for matching)
+    upc_codes = models.JSONField(default=list, blank=True)  # Array of UPC/barcode numbers
+    lot_numbers = models.JSONField(default=list, blank=True)  # Lot codes, best by dates, etc.
+
+    # Distribution
+    distribution_pattern = models.CharField(max_length=200, blank=True)  # "Nationwide", "CA, NY, TX"
+    stores = models.JSONField(default=list, blank=True)  # ["Walmart", "Target"]
+
+    # Hazard information
+    reason_for_recall = models.TextField()  # "Undeclared allergen: sesame"
+    health_hazard_evaluation = models.TextField(blank=True)  # Detailed health risk assessment
+
+    # Remedy
+    remedy = models.TextField(blank=True)  # "Return to store for refund"
+    contact_info = models.TextField(blank=True)  # Company contact for questions
+
+    # Raw API data (for debugging)
+    raw_data = models.JSONField(default=dict)  # Original API response
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-recall_posted_date', '-classification']
+        indexes = [
+            models.Index(fields=['source', 'status']),
+            models.Index(fields=['recall_posted_date', 'classification']),
+            models.Index(fields=['product_name', 'recalling_firm']),
+        ]
+
+    def __str__(self):
+        return f"{self.recall_number}: {self.product_name} ({self.classification})"
+
+    @property
+    def is_critical(self):
+        """Is this a Class I recall requiring immediate attention?"""
+        return self.classification == 'Class I'
+
+    @property
+    def severity_level(self):
+        """Return severity as integer for sorting (1=most severe, 3=least)"""
+        severity_map = {'Class I': 1, 'Class II': 2, 'Class III': 3}
+        return severity_map.get(self.classification, 999)
+
+
+class RecallMatch(models.Model):
+    """Links recalls to user purchases"""
+    recall = models.ForeignKey(ProductRecall, on_delete=models.CASCADE, related_name='matches')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='recall_matches')
+
+    # What did we match to?
+    shopping_trip = models.ForeignKey(ShoppingTrip, on_delete=models.CASCADE, null=True, blank=True)
+    grocery_item = models.ForeignKey(GroceryItem, on_delete=models.SET_NULL, null=True, blank=True)
+
+    # Purchase details for display
+    purchased_product_name = models.CharField(max_length=300)
+    purchased_at_store = models.CharField(max_length=200)
+    purchased_date = models.DateField()
+
+    # Matching metadata
+    confidence_score = models.IntegerField()  # 0-100
+    match_reason = models.TextField()  # "Exact product name + brand match"
+    matched_at = models.DateTimeField(auto_now_add=True)
+
+    # User feedback
+    USER_RESPONSE_CHOICES = [
+        ('unverified', 'Not verified yet'),
+        ('confirmed', 'User confirmed - it is their product'),
+        ('dismissed', 'User dismissed - not their product'),
+        ('unsure', 'User not sure'),
+    ]
+    user_response = models.CharField(max_length=20, choices=USER_RESPONSE_CHOICES, default='unverified')
+    user_response_at = models.DateTimeField(null=True, blank=True)
+    user_feedback = models.TextField(blank=True)  # Why they dismissed it, etc.
+
+    # Notification tracking
+    notified_at = models.DateTimeField(null=True, blank=True)
+    notification_sent = models.BooleanField(default=False)
+
+    # Resolution tracking
+    resolved = models.BooleanField(default=False)  # User handled the recall (returned product, etc.)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-recall__recall_posted_date', '-confidence_score']
+        unique_together = ('recall', 'user', 'shopping_trip')  # Prevent duplicate matches
+        indexes = [
+            models.Index(fields=['user', 'user_response']),
+            models.Index(fields=['notification_sent', 'notified_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username}: {self.recall.product_name} ({self.confidence_score}% confidence)"
+
+    def mark_confirmed(self, feedback=''):
+        """User confirmed this is their product"""
+        self.user_response = 'confirmed'
+        self.user_response_at = timezone.now()
+        self.user_feedback = feedback
+        self.save()
+
+    def mark_dismissed(self, reason=''):
+        """User dismissed this as not their product"""
+        self.user_response = 'dismissed'
+        self.user_response_at = timezone.now()
+        self.user_feedback = reason
+        self.resolved = True
+        self.resolved_at = timezone.now()
+        self.save()
+
+    def mark_resolved(self):
+        """User handled the recall (returned product, etc.)"""
+        self.resolved = True
+        self.resolved_at = timezone.now()
+        self.save()
+

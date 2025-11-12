@@ -1,7 +1,8 @@
 from django.contrib import admin
 from .models import (
     Family, FamilyMember, ShoppingTrip, GroceryItem,
-    ShoppingList, ShoppingListItem, AisleLocation
+    ShoppingList, ShoppingListItem, AisleLocation,
+    ProductRecall, RecallMatch
 )
 
 
@@ -133,3 +134,125 @@ class AisleLocationAdmin(admin.ModelAdmin):
     def confidence_score(self, obj):
         return obj.confidence_score
     confidence_score.short_description = 'Confidence'
+
+
+@admin.register(ProductRecall)
+class ProductRecallAdmin(admin.ModelAdmin):
+    list_display = ('recall_number', 'source', 'classification', 'product_name_short', 'recalling_firm', 'recall_posted_date', 'status', 'severity_indicator')
+    list_filter = ('source', 'classification', 'status', 'recall_posted_date')
+    search_fields = ('recall_number', 'product_name', 'recalling_firm', 'reason_for_recall')
+    readonly_fields = ('created_at', 'updated_at', 'is_critical', 'severity_level')
+    date_hierarchy = 'recall_posted_date'
+    ordering = ('-recall_posted_date', 'classification')
+
+    fieldsets = (
+        ('Recall Information', {
+            'fields': ('source', 'recall_number', 'classification', 'status', 'is_critical', 'severity_level')
+        }),
+        ('Product Details', {
+            'fields': ('product_name', 'product_description', 'recalling_firm', 'upc_codes', 'lot_numbers')
+        }),
+        ('Hazard & Distribution', {
+            'fields': ('reason_for_recall', 'health_hazard_evaluation', 'distribution_pattern', 'stores')
+        }),
+        ('Remedy & Contact', {
+            'fields': ('remedy', 'contact_info')
+        }),
+        ('Dates', {
+            'fields': ('recall_initiation_date', 'recall_posted_date', 'created_at', 'updated_at')
+        }),
+        ('Raw Data', {
+            'fields': ('raw_data',),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def product_name_short(self, obj):
+        return obj.product_name[:80] + '...' if len(obj.product_name) > 80 else obj.product_name
+    product_name_short.short_description = 'Product Name'
+
+    def severity_indicator(self, obj):
+        if obj.classification == 'Class I':
+            return '🚨 Critical'
+        elif obj.classification == 'Class II':
+            return '⚠️ Moderate'
+        else:
+            return 'ℹ️ Minor'
+    severity_indicator.short_description = 'Severity'
+
+
+@admin.register(RecallMatch)
+class RecallMatchAdmin(admin.ModelAdmin):
+    list_display = ('user', 'purchased_product_name', 'recall_number', 'classification_indicator', 'confidence_score', 'user_response_display', 'notified', 'matched_at')
+    list_filter = ('user_response', 'notification_sent', 'resolved', 'recall__classification', 'recall__source', 'matched_at')
+    search_fields = ('user__username', 'purchased_product_name', 'recall__recall_number', 'recall__product_name')
+    readonly_fields = ('matched_at', 'notified_at', 'user_response_at', 'resolved_at', 'confidence_score', 'match_reason')
+    date_hierarchy = 'matched_at'
+    ordering = ('-matched_at', '-recall__classification')
+
+    actions = ['mark_as_notified', 'mark_as_resolved']
+
+    fieldsets = (
+        ('Match Information', {
+            'fields': ('recall', 'user', 'confidence_score', 'match_reason')
+        }),
+        ('Purchase Details', {
+            'fields': ('purchased_product_name', 'purchased_at_store', 'purchased_date', 'shopping_trip', 'grocery_item')
+        }),
+        ('User Response', {
+            'fields': ('user_response', 'user_response_at', 'user_feedback')
+        }),
+        ('Notification Status', {
+            'fields': ('notification_sent', 'notified_at')
+        }),
+        ('Resolution', {
+            'fields': ('resolved', 'resolved_at')
+        }),
+        ('Timestamps', {
+            'fields': ('matched_at',)
+        }),
+    )
+
+    def recall_number(self, obj):
+        return obj.recall.recall_number
+    recall_number.short_description = 'Recall #'
+
+    def classification_indicator(self, obj):
+        classification = obj.recall.classification
+        if classification == 'Class I':
+            return '🚨 Class I'
+        elif classification == 'Class II':
+            return '⚠️ Class II'
+        else:
+            return 'ℹ️ Class III'
+    classification_indicator.short_description = 'Classification'
+
+    def user_response_display(self, obj):
+        if obj.user_response == 'unverified':
+            return '⏳ Unverified'
+        elif obj.user_response == 'confirmed':
+            return '✅ Confirmed'
+        elif obj.user_response == 'dismissed':
+            return '❌ Dismissed'
+        else:
+            return '❓ Unsure'
+    user_response_display.short_description = 'User Response'
+
+    def notified(self, obj):
+        return obj.notification_sent
+    notified.boolean = True
+    notified.short_description = 'Notified?'
+
+    # Custom actions
+    def mark_as_notified(self, request, queryset):
+        from django.utils import timezone
+        updated = queryset.update(notification_sent=True, notified_at=timezone.now())
+        self.message_user(request, f'Marked {updated} matches as notified')
+    mark_as_notified.short_description = 'Mark as notified'
+
+    def mark_as_resolved(self, request, queryset):
+        from django.utils import timezone
+        updated = queryset.update(resolved=True, resolved_at=timezone.now())
+        self.message_user(request, f'Marked {updated} matches as resolved')
+    mark_as_resolved.short_description = 'Mark as resolved'
+

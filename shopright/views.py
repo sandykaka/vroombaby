@@ -2800,3 +2800,324 @@ def search_grocery_items_api(request):
         'query': query,
         'store_name': store_name
     })
+
+
+# ========================================
+# RECALL ALERT SYSTEM API
+# ========================================
+
+@csrf_exempt
+@require_firebase_auth
+def recall_matches_api(request):
+    """
+    Get user's recall matches (products they bought that were recalled)
+
+    GET /shopright/api/recalls/matches/
+    Query params:
+        - status: 'all' | 'unverified' | 'confirmed' | 'dismissed' (default: 'unverified')
+        - classification: 'Class I' | 'Class II' | 'Class III' (optional filter)
+
+    Returns: {
+        'matches': [
+            {
+                'id': 123,
+                'recall': {
+                    'id': 456,
+                    'recall_number': 'F-0234-2024',
+                    'source': 'FDA',
+                    'classification': 'Class I',
+                    'product_name': 'Milk...',
+                    'reason': 'Undeclared allergen',
+                    'recall_date': '2024-01-15',
+                    'is_critical': true
+                },
+                'purchased_product_name': 'Whole Milk',
+                'purchased_at_store': 'Trader Joe\'s',
+                'purchased_date': '2024-01-10',
+                'confidence_score': 95,
+                'match_reason': 'Exact product+brand match',
+                'user_response': 'unverified',
+                'notified_at': '2024-01-15T08:00:00Z',
+                'created_at': '2024-01-15T02:00:00Z'
+            }
+        ],
+        'count': 1,
+        'critical_count': 1
+    }
+    """
+    from shopright.models import RecallMatch
+
+    # Get filter parameters
+    status = request.GET.get('status', 'unverified')
+    classification = request.GET.get('classification', None)
+
+    # Base query: user's matches
+    matches = RecallMatch.objects.filter(user=request.user).select_related('recall')
+
+    # Filter by status
+    if status != 'all':
+        matches = matches.filter(user_response=status)
+
+    # Filter by classification
+    if classification:
+        matches = matches.filter(recall__classification=classification)
+
+    # Order by severity and date
+    matches = matches.order_by(
+        '-recall__classification',  # Class I first
+        '-recall__recall_posted_date'
+    )
+
+    # Serialize matches
+    matches_data = []
+    critical_count = 0
+
+    for match in matches:
+        recall = match.recall
+
+        # Count critical matches
+        if recall.is_critical and match.user_response == 'unverified':
+            critical_count += 1
+
+        match_dict = {
+            'id': match.id,
+            'recall': {
+                'id': recall.id,
+                'recall_number': recall.recall_number,
+                'source': recall.source,
+                'classification': recall.classification,
+                'product_name': recall.product_name,
+                'reason': recall.reason_for_recall[:100],  # Truncate for list view
+                'recall_date': recall.recall_posted_date.isoformat(),
+                'is_critical': recall.is_critical
+            },
+            'purchased_product_name': match.purchased_product_name,
+            'purchased_at_store': match.purchased_at_store,
+            'purchased_date': match.purchased_date.isoformat(),
+            'shopping_trip_id': match.shopping_trip.id if match.shopping_trip else None,
+            'confidence_score': match.confidence_score,
+            'match_reason': match.match_reason,
+            'user_response': match.user_response,
+            'notified_at': match.notified_at.isoformat() if match.notified_at else None,
+            'created_at': match.matched_at.isoformat()
+        }
+        matches_data.append(match_dict)
+
+    logger.info(f"📋 Recall matches for {request.user.username}: {len(matches_data)} matches ({critical_count} critical)")
+
+    return JsonResponse({
+        'matches': matches_data,
+        'count': len(matches_data),
+        'critical_count': critical_count
+    })
+
+
+@csrf_exempt
+@require_firebase_auth
+def recall_detail_api(request, recall_id):
+    """
+    Get full details for a specific recall
+
+    GET /shopright/api/recalls/{id}/detail/
+
+    Returns: {
+        'recall': {
+            'id': 456,
+            'recall_number': 'F-0234-2024',
+            'source': 'FDA',
+            'classification': 'Class I',
+            'status': 'Active',
+            'product_name': 'Whole Milk...',
+            'product_description': 'Full description...',
+            'recalling_firm': 'Company Name',
+            'reason_for_recall': 'Undeclared allergen: milk',
+            'health_hazard': 'May cause severe allergic reaction...',
+            'distribution_pattern': 'Nationwide',
+            'stores': ['Walmart', 'Target'],
+            'remedy': 'Return to store for refund',
+            'contact_info': '1-800-XXX-XXXX',
+            'recall_initiation_date': '2024-01-10',
+            'recall_posted_date': '2024-01-15',
+            'is_critical': true
+        }
+    }
+    """
+    from shopright.models import ProductRecall
+
+    try:
+        recall = ProductRecall.objects.get(id=recall_id)
+    except ProductRecall.DoesNotExist:
+        return JsonResponse({'error': 'Recall not found'}, status=404)
+
+    recall_dict = {
+        'id': recall.id,
+        'recall_number': recall.recall_number,
+        'source': recall.source,
+        'classification': recall.classification,
+        'status': recall.status,
+        'product_name': recall.product_name,
+        'product_description': recall.product_description,
+        'recalling_firm': recall.recalling_firm,
+        'reason_for_recall': recall.reason_for_recall,
+        'health_hazard': recall.health_hazard_evaluation,
+        'distribution_pattern': recall.distribution_pattern,
+        'stores': recall.stores,
+        'remedy': recall.remedy,
+        'contact_info': recall.contact_info,
+        'upc_codes': recall.upc_codes,
+        'lot_numbers': recall.lot_numbers,
+        'recall_initiation_date': recall.recall_initiation_date.isoformat(),
+        'recall_posted_date': recall.recall_posted_date.isoformat(),
+        'is_critical': recall.is_critical
+    }
+
+    logger.info(f"📄 Recall detail viewed: {recall.recall_number} by {request.user.username}")
+
+    return JsonResponse({'recall': recall_dict})
+
+
+@csrf_exempt
+@require_firebase_auth
+def confirm_recall_match_api(request, match_id):
+    """
+    User confirms this is their product (they bought the recalled item)
+
+    POST /shopright/api/recalls/{id}/confirm/
+    Body: {
+        'feedback': 'Yes, I bought this at Walmart' (optional)
+    }
+
+    Returns: {
+        'success': true,
+        'match': {...}
+    }
+    """
+    from shopright.models import RecallMatch
+
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+
+    try:
+        match = RecallMatch.objects.get(id=match_id, user=request.user)
+    except RecallMatch.DoesNotExist:
+        return JsonResponse({'error': 'Match not found'}, status=404)
+
+    # Parse request body
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        data = {}
+
+    feedback = data.get('feedback', '')
+
+    # Mark as confirmed
+    match.mark_confirmed(feedback=feedback)
+
+    logger.info(f"✅ {request.user.username} CONFIRMED recall match for {match.purchased_product_name}")
+
+    return JsonResponse({
+        'success': True,
+        'match': {
+            'id': match.id,
+            'user_response': match.user_response,
+            'user_response_at': match.user_response_at.isoformat(),
+            'recall_number': match.recall.recall_number
+        }
+    })
+
+
+@csrf_exempt
+@require_firebase_auth
+def dismiss_recall_match_api(request, match_id):
+    """
+    User dismisses false positive (this is NOT their product)
+
+    POST /shopright/api/recalls/{id}/dismiss/
+    Body: {
+        'reason': 'I didn\'t buy this brand' (optional)
+    }
+
+    Returns: {
+        'success': true,
+        'match': {...}
+    }
+    """
+    from shopright.models import RecallMatch
+
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+
+    try:
+        match = RecallMatch.objects.get(id=match_id, user=request.user)
+    except RecallMatch.DoesNotExist:
+        return JsonResponse({'error': 'Match not found'}, status=404)
+
+    # Parse request body
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        data = {}
+
+    reason = data.get('reason', '')
+
+    # Mark as dismissed
+    match.mark_dismissed(reason=reason)
+
+    logger.info(f"⏭️ {request.user.username} DISMISSED recall match for {match.purchased_product_name}: {reason}")
+
+    return JsonResponse({
+        'success': True,
+        'match': {
+            'id': match.id,
+            'user_response': match.user_response,
+            'user_response_at': match.user_response_at.isoformat(),
+            'resolved': match.resolved
+        }
+    })
+
+
+@csrf_exempt
+@require_firebase_auth
+def mark_recall_notified_api(request, match_id):
+    """
+    Mark a recall match as notified (notification sent to user).
+    Called by iOS app after scheduling local notification.
+
+    POST /api/recalls/match/{match_id}/mark-notified/
+
+    Response:
+    {
+        'success': true,
+        'match': {
+            'id': 1,
+            'notification_sent': true,
+            'notified_at': '2025-01-10T09:00:00Z'
+        }
+    }
+    """
+    from shopright.models import RecallMatch
+    from django.utils import timezone
+
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+
+    try:
+        match = RecallMatch.objects.get(id=match_id, user=request.user)
+    except RecallMatch.DoesNotExist:
+        return JsonResponse({'error': 'Match not found'}, status=404)
+
+    # Mark as notified
+    match.notification_sent = True
+    match.notified_at = timezone.now()
+    match.save()
+
+    logger.info(f"🔔 Marked recall match {match_id} as notified for {request.user.username}")
+
+    return JsonResponse({
+        'success': True,
+        'match': {
+            'id': match.id,
+            'notification_sent': match.notification_sent,
+            'notified_at': match.notified_at.isoformat() if match.notified_at else None
+        }
+    })

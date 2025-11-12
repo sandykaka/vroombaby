@@ -39,5 +39,12 @@ urlpatterns = [
     path('api/location/<int:grocery_item_id>/', views.get_location_api, name='get_location'),
     path('api/location/<int:grocery_item_id>/all/', views.get_all_locations_api, name='get_all_locations'),
     path('api/location/report/', views.report_wrong_location_api, name='report_wrong_location'),
+
+    # Recall Alert System
+    path('api/recalls/matches/', views.recall_matches_api, name='recall_matches'),
+    path('api/recalls/<int:recall_id>/detail/', views.recall_detail_api, name='recall_detail'),
+    path('api/recalls/match/<int:match_id>/confirm/', views.confirm_recall_match_api, name='confirm_recall_match'),
+    path('api/recalls/match/<int:match_id>/dismiss/', views.dismiss_recall_match_api, name='dismiss_recall_match'),
+    path('api/recalls/match/<int:match_id>/mark-notified/', views.mark_recall_notified_api, name='mark_recall_notified'),
 ]
 
