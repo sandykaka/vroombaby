@@ -92,6 +92,29 @@ class GroceryItem(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Health/Nutrition data (from OpenFoodFacts API)
+    nutriscore_grade = models.CharField(
+        max_length=1,
+        blank=True,
+        db_index=True,
+        help_text="Nutri-Score grade: A (best) to E (worst)"
+    )
+    nova_group = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="NOVA processing level: 1 (unprocessed) to 4 (ultra-processed)"
+    )
+    nutrition_data = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Full nutritional breakdown: sugar, sodium, calories, etc."
+    )
+    last_nutrition_fetch = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When nutrition data was last fetched (for cache invalidation)"
+    )
+
     class Meta:
         ordering = ['-times_purchased', 'name']
         # Each store has its own product catalog

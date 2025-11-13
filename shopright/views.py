@@ -16,6 +16,7 @@ from .models import (
     Family, FamilyMember, ShoppingTrip, GroceryItem,
     ShoppingList, ShoppingListItem, AisleLocation, LocationVote
 )
+from .services.openfoodfacts_service import get_service as get_openfoodfacts_service
 
 logger = logging.getLogger(__name__)
 
@@ -1865,7 +1866,13 @@ def scan_barcode_api(request):
             'families_helped': families_helped,
             'already_existed': True,
             'has_image': bool(grocery_item.image_url and grocery_item.image_url.strip()),
-            'enriched_by': grocery_item.first_enriched_by.username if grocery_item.first_enriched_by else 'community'
+            'enriched_by': grocery_item.first_enriched_by.username if grocery_item.first_enriched_by else 'community',
+            # Health/Nutrition data
+            'nutrition': {
+                'nutriscore_grade': grocery_item.nutriscore_grade,  # A-E or None
+                'nova_group': grocery_item.nova_group,  # 1-4 or None
+                'has_nutrition_data': bool(grocery_item.nutrition_data)
+            } if (grocery_item.nutriscore_grade or grocery_item.nova_group) else None
         })
 
     # Barcode NOT in database - fetch from API
@@ -1924,6 +1931,13 @@ def scan_barcode_api(request):
         list_item.brand = product_data['brand']
     list_item.save()
 
+    # Fetch nutrition data from OpenFoodFacts
+    openfoodfacts_service = get_openfoodfacts_service()
+    nutrition_enriched = openfoodfacts_service.enrich_grocery_item(grocery_item)
+
+    if nutrition_enriched:
+        logger.info(f"✅ Fetched nutrition for {grocery_item.name}: Nutri-Score {grocery_item.nutriscore_grade.upper() if grocery_item.nutriscore_grade else 'N/A'}")
+
     # Count how many other families will benefit from this scan (same store only)
     potential_matches = ShoppingListItem.objects.filter(
         name__icontains=grocery_item.name[:20],
@@ -1944,12 +1958,18 @@ def scan_barcode_api(request):
             'image_url': product_data.get('image_url', ''),
             'quantity': product_data.get('quantity', ''),
             'categories': product_data.get('categories', ''),
-            'nutrition_grade': product_data.get('nutrition_grade', '')
+            'nutrition_grade': product_data.get('nutrition_grade', '')  # Legacy field
         },
         'grocery_item_id': grocery_item.id,
         'families_helped': families_helped,
         'already_existed': False,
-        'has_image': bool(grocery_item.image_url and grocery_item.image_url.strip())
+        'has_image': bool(grocery_item.image_url and grocery_item.image_url.strip()),
+        # NEW: Health/Nutrition data
+        'nutrition': {
+            'nutriscore_grade': grocery_item.nutriscore_grade,  # A-E or None
+            'nova_group': grocery_item.nova_group,  # 1-4 or None
+            'has_nutrition_data': bool(grocery_item.nutrition_data)
+        } if nutrition_enriched else None
     })
 
 
