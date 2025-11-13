@@ -1604,13 +1604,24 @@ def shopping_list_detail_api(request, list_id):
             # No fuzzy matching during display - we only want to show images for correctly linked items
             image_url = None
             grocery_item_id = None
+            nutrition_data = None
 
-            if item.grocery_item and item.grocery_item.image_url:
-                image_url = item.grocery_item.image_url
+            if item.grocery_item:
+                if item.grocery_item.image_url:
+                    image_url = item.grocery_item.image_url
                 grocery_item_id = item.grocery_item.id
+
+                # Add nutrition data if available
+                if item.grocery_item.nutriscore_grade or item.grocery_item.nova_group:
+                    nutrition_data = {
+                        'nutriscore_grade': item.grocery_item.nutriscore_grade,
+                        'nova_group': item.grocery_item.nova_group,
+                        'has_nutrition_data': bool(item.grocery_item.nutrition_data)
+                    }
 
             item_dict['image_url'] = image_url
             item_dict['grocery_item_id'] = grocery_item_id
+            item_dict['nutrition'] = nutrition_data
             enriched_items.append(item_dict)
 
         return JsonResponse({
@@ -1667,26 +1678,39 @@ def shopping_list_detail_api(request, list_id):
 
         # Return updated list
         items = lst.list_items.all()
+        items_data = []
+        for item in items:
+            item_dict = {
+                'id': item.id,
+                'name': item.name,
+                'brand': item.brand,
+                'size': item.size,
+                'price': item.price,
+                'category': item.category,
+                'quantity': item.quantity,
+                'is_checked': item.is_checked,
+                'last_purchased_date': item.last_purchased_date.isoformat() if item.last_purchased_date else None,
+                'purchase_count': item.purchase_count
+            }
+
+            # Add nutrition data if grocery_item is linked
+            if item.grocery_item and (item.grocery_item.nutriscore_grade or item.grocery_item.nova_group):
+                item_dict['nutrition'] = {
+                    'nutriscore_grade': item.grocery_item.nutriscore_grade,
+                    'nova_group': item.grocery_item.nova_group,
+                    'has_nutrition_data': bool(item.grocery_item.nutrition_data)
+                }
+            else:
+                item_dict['nutrition'] = None
+
+            items_data.append(item_dict)
+
         return JsonResponse({
             'list': {
                 'id': lst.id,
                 'store_name': lst.store_name,
                 'store_location': lst.store_location or '',
-                'items': [
-                    {
-                        'id': item.id,
-                        'name': item.name,
-                        'brand': item.brand,
-                        'size': item.size,
-                        'price': item.price,
-                        'category': item.category,
-                        'quantity': item.quantity,
-                        'is_checked': item.is_checked,
-                        'last_purchased_date': item.last_purchased_date.isoformat() if item.last_purchased_date else None,
-                        'purchase_count': item.purchase_count
-                    }
-                    for item in items
-                ]
+                'items': items_data
             }
         })
 
