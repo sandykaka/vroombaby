@@ -1616,7 +1616,7 @@ def shopping_list_detail_api(request, list_id):
                     nutrition_data = {
                         'nutriscore_grade': item.grocery_item.nutriscore_grade,
                         'nova_group': item.grocery_item.nova_group,
-                        'has_nutrition_data': bool(item.grocery_item.nutrition_data),
+                        'has_nutrition_data': True if item.grocery_item.nutrition_data else False,  # Explicit True/False
                         'nutrients': item.grocery_item.nutrition_data.get('nutrients') if item.grocery_item.nutrition_data else None
                     }
 
@@ -1699,7 +1699,7 @@ def shopping_list_detail_api(request, list_id):
                 item_dict['nutrition'] = {
                     'nutriscore_grade': item.grocery_item.nutriscore_grade,
                     'nova_group': item.grocery_item.nova_group,
-                    'has_nutrition_data': bool(item.grocery_item.nutrition_data),
+                    'has_nutrition_data': True if item.grocery_item.nutrition_data else False,  # Explicit True/False
                     'nutrients': item.grocery_item.nutrition_data.get('nutrients') if item.grocery_item.nutrition_data else None
                 }
             else:
