@@ -1898,7 +1898,7 @@ def scan_barcode_api(request):
             'nutrition': {
                 'nutriscore_grade': grocery_item.nutriscore_grade,  # A-E or None
                 'nova_group': grocery_item.nova_group,  # 1-4 or None
-                'has_nutrition_data': bool(grocery_item.nutrition_data),
+                'has_nutrition_data': True if grocery_item.nutrition_data else False,  # Explicit True/False
                 'nutrients': grocery_item.nutrition_data.get('nutrients') if grocery_item.nutrition_data else None
             } if (grocery_item.nutriscore_grade or grocery_item.nova_group) else None
         }
@@ -2007,7 +2007,7 @@ def scan_barcode_api(request):
         'nutrition': {
             'nutriscore_grade': grocery_item.nutriscore_grade,  # A-E or None
             'nova_group': grocery_item.nova_group,  # 1-4 or None
-            'has_nutrition_data': bool(grocery_item.nutrition_data),
+            'has_nutrition_data': True if grocery_item.nutrition_data else False,  # Explicit True/False
             'nutrients': grocery_item.nutrition_data.get('nutrients') if grocery_item.nutrition_data else None
         } if nutrition_enriched else None
     }
