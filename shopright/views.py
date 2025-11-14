@@ -1903,9 +1903,6 @@ def scan_barcode_api(request):
             } if (grocery_item.nutriscore_grade or grocery_item.nova_group) else None
         }
 
-        # DEBUG: Log the exact response being sent
-        logger.info(f"🔍 DEBUG - Barcode scan response (EXISTING product): {json.dumps(response_data, indent=2)}")
-
         # Return with anti-caching headers (prevent AWS ELB, iOS URLSession, etc. from caching)
         response = JsonResponse(response_data)
         response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
@@ -2012,10 +2009,124 @@ def scan_barcode_api(request):
         } if nutrition_enriched else None
     }
 
-    # DEBUG: Log the exact response being sent
-    logger.info(f"🔍 DEBUG - Barcode scan response (NEW product): {json.dumps(response_data, indent=2)}")
-
     # Return with anti-caching headers (prevent AWS ELB, iOS URLSession, etc. from caching)
+    response = JsonResponse(response_data)
+    response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
+    return response
+
+
+@csrf_exempt
+@require_firebase_auth
+def lookup_barcode_api(request):
+    """
+    Standalone barcode lookup for nutrition info (no list_item_id required)
+    Used by NutritionBarcodeScannerView for exploratory scanning
+
+    POST /shopright/api/lookup-barcode/
+    Body: {
+        "barcode": "012345678901"
+    }
+
+    Returns: {
+        "success": true,
+        "product_name": "Organic Whole Milk",
+        "brand": "Horizon",
+        "image_url": "https://...",
+        "nutrition": {
+            "nutriscore_grade": "a",
+            "nova_group": 1,
+            "has_nutrition_data": true,
+            "nutrients": {...}
+        },
+        "grocery_item_id": 456  // If exists in DB for any store
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    barcode = data.get('barcode', '').strip()
+
+    if not barcode:
+        return JsonResponse({'error': 'Missing barcode'}, status=400)
+
+    logger.info(f"🔍 Standalone barcode lookup: {barcode} by {request.user.username}")
+
+    # Check if barcode exists in our database (any store)
+    grocery_item = GroceryItem.objects.filter(barcode=barcode).first()
+
+    if grocery_item and (grocery_item.nutriscore_grade or grocery_item.nova_group or grocery_item.nutrition_data):
+        # We have nutrition data cached!
+        logger.info(f"✅ Found cached nutrition for {barcode}: {grocery_item.name}")
+
+        response_data = {
+            'success': True,
+            'product_name': grocery_item.name,
+            'brand': grocery_item.brand or '',
+            'image_url': grocery_item.image_url or '',
+            'nutrition': {
+                'nutriscore_grade': grocery_item.nutriscore_grade,
+                'nova_group': grocery_item.nova_group,
+                'has_nutrition_data': True if grocery_item.nutrition_data else False,
+                'nutrients': grocery_item.nutrition_data.get('nutrients') if grocery_item.nutrition_data else None
+            },
+            'grocery_item_id': grocery_item.id,
+            'from_cache': True
+        }
+
+        response = JsonResponse(response_data)
+        response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response['Pragma'] = 'no-cache'
+        response['Expires'] = '0'
+        return response
+
+    # Not in cache or no nutrition data - fetch from OpenFoodFacts
+    openfoodfacts_service = get_openfoodfacts_service()
+    nutrition_data = openfoodfacts_service.fetch_product_by_barcode(barcode)
+
+    if not nutrition_data:
+        return JsonResponse({
+            'success': False,
+            'error': 'Product not found in nutrition database'
+        }, status=404)
+
+    logger.info(f"✅ Fetched nutrition from OpenFoodFacts for {barcode}: {nutrition_data.get('product_name', 'Unknown')}")
+
+    # Build response
+    response_data = {
+        'success': True,
+        'product_name': nutrition_data.get('product_name', 'Unknown Product'),
+        'brand': nutrition_data.get('brands', ''),
+        'image_url': nutrition_data.get('image_url', ''),
+        'nutrition': {
+            'nutriscore_grade': nutrition_data.get('nutriscore_grade'),
+            'nova_group': nutrition_data.get('nova_group'),
+            'has_nutrition_data': bool(nutrition_data.get('nutrients')),
+            'nutrients': nutrition_data.get('nutrients')
+        },
+        'grocery_item_id': grocery_item.id if grocery_item else None,
+        'from_cache': False
+    }
+
+    # If we found a grocery_item but it lacked nutrition, update it now
+    if grocery_item:
+        if nutrition_data.get('nutriscore_grade'):
+            grocery_item.nutriscore_grade = nutrition_data['nutriscore_grade']
+        if nutrition_data.get('nova_group'):
+            grocery_item.nova_group = nutrition_data['nova_group']
+        if nutrition_data.get('nutrients'):
+            grocery_item.nutrition_data = nutrition_data
+        from django.utils import timezone
+        grocery_item.last_nutrition_fetch = timezone.now()
+        grocery_item.save()
+        logger.info(f"💾 Updated cached grocery item {grocery_item.id} with fresh nutrition data")
+
     response = JsonResponse(response_data)
     response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     response['Pragma'] = 'no-cache'
@@ -2862,6 +2973,18 @@ def search_grocery_items_api(request):
             'image_url': request.build_absolute_uri(item.image_url) if item.image_url else '',
             'times_purchased': item.times_purchased
         }
+
+        # Add nutrition data if available
+        if item.nutriscore_grade or item.nova_group:
+            item_dict['nutrition'] = {
+                'nutriscore_grade': item.nutriscore_grade,
+                'nova_group': item.nova_group,
+                'has_nutrition_data': True if item.nutrition_data else False,
+                'nutrients': item.nutrition_data.get('nutrients') if item.nutrition_data else None
+            }
+        else:
+            item_dict['nutrition'] = None
+
         items_data.append(item_dict)
 
     return JsonResponse({

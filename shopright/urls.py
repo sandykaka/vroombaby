@@ -28,6 +28,7 @@ urlpatterns = [
 
     # Barcode Scanning
     path('api/scan-barcode/', views.scan_barcode_api, name='scan_barcode'),
+    path('api/lookup-barcode/', views.lookup_barcode_api, name='lookup_barcode'),  # Standalone nutrition lookup
     path('api/upload-product-photo/', views.upload_product_photo_api, name='upload_product_photo'),
     path('api/report-wrong-image/', views.report_wrong_image_api, name='report_wrong_image'),
     path('api/flagged-images/', views.flagged_images_api, name='flagged_images'),
