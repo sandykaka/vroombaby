@@ -1879,7 +1879,8 @@ def scan_barcode_api(request):
         ).exclude(shopping_list__family=list_item.shopping_list.family)
         families_helped = potential_matches.values('shopping_list__family').distinct().count()
 
-        return JsonResponse({
+        # Build response
+        response_data = {
             'success': True,
             'message': 'Product already in database!',
             'product_data': {
@@ -1900,7 +1901,13 @@ def scan_barcode_api(request):
                 'has_nutrition_data': bool(grocery_item.nutrition_data),
                 'nutrients': grocery_item.nutrition_data.get('nutrients') if grocery_item.nutrition_data else None
             } if (grocery_item.nutriscore_grade or grocery_item.nova_group) else None
-        })
+        }
+
+        # DEBUG: Log the exact response being sent
+        import json
+        logger.info(f"🔍 DEBUG - Barcode scan response (EXISTING product): {json.dumps(response_data, indent=2)}")
+
+        return JsonResponse(response_data)
 
     # Barcode NOT in database - fetch from API
     product_data = lookup_barcode_in_openfoodfacts(barcode)
@@ -1976,7 +1983,8 @@ def scan_barcode_api(request):
 
     logger.info(f"📊 Barcode scan will help {families_helped} other families at {store_name}")
 
-    return JsonResponse({
+    # Build response
+    response_data = {
         'success': True,
         'message': f'Product added! You helped {families_helped} other families.' if families_helped > 0 else 'Product added to database!',
         'product_data': {
@@ -1998,7 +2006,13 @@ def scan_barcode_api(request):
             'has_nutrition_data': bool(grocery_item.nutrition_data),
             'nutrients': grocery_item.nutrition_data.get('nutrients') if grocery_item.nutrition_data else None
         } if nutrition_enriched else None
-    })
+    }
+
+    # DEBUG: Log the exact response being sent
+    import json
+    logger.info(f"🔍 DEBUG - Barcode scan response (NEW product): {json.dumps(response_data, indent=2)}")
+
+    return JsonResponse(response_data)
 
 
 @csrf_exempt
