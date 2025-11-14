@@ -1906,7 +1906,12 @@ def scan_barcode_api(request):
         # DEBUG: Log the exact response being sent
         logger.info(f"🔍 DEBUG - Barcode scan response (EXISTING product): {json.dumps(response_data, indent=2)}")
 
-        return JsonResponse(response_data)
+        # Return with anti-caching headers (prevent AWS ELB, iOS URLSession, etc. from caching)
+        response = JsonResponse(response_data)
+        response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response['Pragma'] = 'no-cache'
+        response['Expires'] = '0'
+        return response
 
     # Barcode NOT in database - fetch from API
     product_data = lookup_barcode_in_openfoodfacts(barcode)
@@ -2010,7 +2015,12 @@ def scan_barcode_api(request):
     # DEBUG: Log the exact response being sent
     logger.info(f"🔍 DEBUG - Barcode scan response (NEW product): {json.dumps(response_data, indent=2)}")
 
-    return JsonResponse(response_data)
+    # Return with anti-caching headers (prevent AWS ELB, iOS URLSession, etc. from caching)
+    response = JsonResponse(response_data)
+    response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
+    return response
 
 
 @csrf_exempt
