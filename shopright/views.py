@@ -1955,10 +1955,13 @@ def scan_barcode_api(request):
 
     # Check if item with same name+store exists WITHOUT barcode (from receipt scan)
     # This prevents duplicates when scanning barcode on items that were manually added
+    from django.db.models import Q
+
     existing_item = GroceryItem.objects.filter(
         name=list_item.name,
-        store_name=store_name,
-        barcode__isnull=True  # Only match items without barcode
+        store_name=store_name
+    ).filter(
+        Q(barcode__isnull=True) | Q(barcode='')  # Match both NULL and empty string
     ).first()
 
     if existing_item:
