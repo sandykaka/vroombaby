@@ -1904,7 +1904,6 @@ def scan_barcode_api(request):
         }
 
         # DEBUG: Log the exact response being sent
-        import json
         logger.info(f"🔍 DEBUG - Barcode scan response (EXISTING product): {json.dumps(response_data, indent=2)}")
 
         return JsonResponse(response_data)
@@ -2009,7 +2008,6 @@ def scan_barcode_api(request):
     }
 
     # DEBUG: Log the exact response being sent
-    import json
     logger.info(f"🔍 DEBUG - Barcode scan response (NEW product): {json.dumps(response_data, indent=2)}")
 
     return JsonResponse(response_data)
