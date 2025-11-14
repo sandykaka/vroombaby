@@ -1676,16 +1676,15 @@ def shopping_list_detail_api(request, list_id):
                     ).first()
 
                     if existing_item:
-                        # Item already exists - increment quantity or uncheck if it was checked
+                        # Item already exists - only act if it was checked (move to "Need to Buy")
                         if existing_item.is_checked:
                             # Item was in "Already Got" section - move to "Need to Buy"
                             existing_item.is_checked = False
+                            existing_item.save()
                             logger.info(f"Item '{name}' already exists (checked), moving to Need to Buy")
                         else:
-                            # Item already in "Need to Buy" - just increment quantity
-                            existing_item.quantity += item_data.get('quantity', 1)
-                            logger.info(f"Item '{name}' already exists (unchecked), incrementing quantity to {existing_item.quantity}")
-                        existing_item.save()
+                            # Item already in "Need to Buy" - skip duplicate
+                            logger.info(f"Item '{name}' already exists in Need to Buy, skipping")
                     else:
                         # Create new item
                         ShoppingListItem.objects.create(
@@ -1954,35 +1953,44 @@ def scan_barcode_api(request):
     item_brand = list_item.brand or ''
     final_brand = api_brand if api_brand else item_brand
 
-    # Use get_or_create to handle case where item exists but barcode wasn't linked
-    grocery_item, created = GroceryItem.objects.get_or_create(
-        name=list_item.name,  # Use receipt name, not barcode API name!
-        brand=final_brand,
-        size=product_data.get('quantity', list_item.size),
-        store_name=store_name,  # Store-specific!
-        defaults={
-            'category': list_item.category,
-            'barcode': barcode,
-            'image_url': product_data.get('image_url', ''),
-            'enriched_from_barcode': True,
-            'first_enriched_by': request.user,
-            'first_enriched_at': timezone.now()
-        }
-    )
+    # Check if item with same name+store exists WITHOUT barcode (from receipt scan)
+    # This prevents duplicates when scanning barcode on items that were manually added
+    existing_item = GroceryItem.objects.filter(
+        name=list_item.name,
+        store_name=store_name,
+        barcode__isnull=True  # Only match items without barcode
+    ).first()
 
-    if created:
-        logger.info(f"🎉 NEW product for {store_name}: {grocery_item.name} (brand: {final_brand}, barcode {barcode}) by {request.user.username}")
+    if existing_item:
+        # UPDATE existing item with barcode data (prevents duplicates in autocomplete)
+        logger.info(f"🔗 Updating existing item with barcode: {existing_item.name} @ {store_name} (barcode {barcode})")
+        existing_item.barcode = barcode
+        existing_item.brand = final_brand
+        existing_item.size = product_data.get('quantity', list_item.size)
+        existing_item.image_url = product_data.get('image_url', '')
+        existing_item.category = list_item.category or existing_item.category
+        existing_item.enriched_from_barcode = True
+        existing_item.first_enriched_by = request.user
+        existing_item.first_enriched_at = timezone.now()
+        existing_item.save()
+        grocery_item = existing_item
+        created = False
     else:
-        # Item existed but didn't have barcode - update it
-        logger.info(f"🔗 Linking existing item to barcode: {grocery_item.name} @ {store_name} (barcode {barcode})")
-        grocery_item.barcode = barcode
-        if not grocery_item.image_url and product_data.get('image_url'):
-            grocery_item.image_url = product_data.get('image_url', '')
-        if not grocery_item.enriched_from_barcode:
-            grocery_item.enriched_from_barcode = True
-            grocery_item.first_enriched_by = request.user
-            grocery_item.first_enriched_at = timezone.now()
-        grocery_item.save()
+        # CREATE new item (different product with different barcode, or first time scanning)
+        grocery_item = GroceryItem.objects.create(
+            name=list_item.name,  # Use receipt name, not barcode API name!
+            brand=final_brand,
+            size=product_data.get('quantity', list_item.size),
+            store_name=store_name,  # Store-specific!
+            category=list_item.category,
+            barcode=barcode,
+            image_url=product_data.get('image_url', ''),
+            enriched_from_barcode=True,
+            first_enriched_by=request.user,
+            first_enriched_at=timezone.now()
+        )
+        created = True
+        logger.info(f"🎉 NEW product for {store_name}: {grocery_item.name} (brand: {final_brand}, barcode {barcode}) by {request.user.username}")
 
     # Link this list item to the new grocery item
     list_item.grocery_item = grocery_item
