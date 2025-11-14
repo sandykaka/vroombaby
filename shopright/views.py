@@ -1662,18 +1662,44 @@ def shopping_list_detail_api(request, list_id):
                     except ShoppingListItem.DoesNotExist:
                         continue
                 else:
-                    # Add new item
-                    ShoppingListItem.objects.create(
+                    # Add new item (or update if exists due to unique constraint)
+                    name = item_data.get('name', '')
+                    brand = item_data.get('brand', '')
+                    size = item_data.get('size', '')
+
+                    # Check if item already exists (same name/brand/size)
+                    existing_item = ShoppingListItem.objects.filter(
                         shopping_list=lst,
-                        name=item_data.get('name', ''),
-                        brand=item_data.get('brand', ''),
-                        size=item_data.get('size', ''),
-                        price=item_data.get('price', ''),
-                        category=item_data.get('category', ''),
-                        quantity=item_data.get('quantity', 1),
-                        is_checked=item_data.get('is_checked', True),
-                        added_by=request.user
-                    )
+                        name=name,
+                        brand=brand,
+                        size=size
+                    ).first()
+
+                    if existing_item:
+                        # Item already exists - increment quantity or uncheck if it was checked
+                        if existing_item.is_checked:
+                            # Item was in "Already Got" section - move to "Need to Buy"
+                            existing_item.is_checked = False
+                            logger.info(f"Item '{name}' already exists (checked), moving to Need to Buy")
+                        else:
+                            # Item already in "Need to Buy" - just increment quantity
+                            existing_item.quantity += item_data.get('quantity', 1)
+                            logger.info(f"Item '{name}' already exists (unchecked), incrementing quantity to {existing_item.quantity}")
+                        existing_item.save()
+                    else:
+                        # Create new item
+                        ShoppingListItem.objects.create(
+                            shopping_list=lst,
+                            name=name,
+                            brand=brand,
+                            size=size,
+                            price=item_data.get('price', ''),
+                            category=item_data.get('category', ''),
+                            quantity=item_data.get('quantity', 1),
+                            is_checked=item_data.get('is_checked', False),  # Default to unchecked (Need to Buy)
+                            added_by=request.user
+                        )
+                        logger.info(f"Created new item '{name}' in list {list_id}")
 
         logger.info(f"Updated shopping list {list_id}: {lst.store_name}, items={lst.total_count}")
 
