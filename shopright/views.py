@@ -6,6 +6,7 @@ from functools import wraps
 
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
 from django.contrib.auth.models import User
 from django.db import models
 from firebase_admin import auth as firebase_auth
