@@ -3355,6 +3355,7 @@ def mark_recall_notified_api(request, match_id):
 
 
 @require_http_methods(["GET"])
+@require_firebase_auth
 def monthly_spending_api(request):
     """
     Get spending analytics for a given month
@@ -3390,13 +3391,14 @@ def monthly_spending_api(request):
     from decimal import Decimal
     from collections import defaultdict
 
-    # Get parameters
-    year = request.GET.get('year', datetime.now().year)
-    month = request.GET.get('month', datetime.now().month)
+    # Get parameters with proper defaults
+    now = datetime.now()
+    year_param = request.GET.get('year')
+    month_param = request.GET.get('month')
 
     try:
-        year = int(year)
-        month = int(month)
+        year = int(year_param) if year_param else now.year
+        month = int(month_param) if month_param else now.month
     except (ValueError, TypeError):
         return JsonResponse({'error': 'Invalid year or month'}, status=400)
 
