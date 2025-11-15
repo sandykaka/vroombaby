@@ -47,5 +47,8 @@ urlpatterns = [
     path('api/recalls/match/<int:match_id>/confirm/', views.confirm_recall_match_api, name='confirm_recall_match'),
     path('api/recalls/match/<int:match_id>/dismiss/', views.dismiss_recall_match_api, name='dismiss_recall_match'),
     path('api/recalls/match/<int:match_id>/mark-notified/', views.mark_recall_notified_api, name='mark_recall_notified'),
+
+    # Budget/Spending Analytics
+    path('api/spending/monthly/', views.monthly_spending_api, name='monthly_spending'),
 ]
 

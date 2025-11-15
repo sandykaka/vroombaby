@@ -3351,3 +3351,137 @@ def mark_recall_notified_api(request, match_id):
             'notified_at': match.notified_at.isoformat() if match.notified_at else None
         }
     })
+
+
+@require_http_methods(["GET"])
+def monthly_spending_api(request):
+    """
+    Get spending analytics for a given month
+
+    GET /shopright/api/spending/monthly/?year=2024&month=11
+
+    Returns:
+    {
+        "year": 2024,
+        "month": 11,
+        "total_spent": 423.18,
+        "trip_count": 5,
+        "by_store": {
+            "Trader Joe's": 256.00,
+            "Whole Foods": 167.18
+        },
+        "by_category": {
+            "Produce": 145.00,
+            "Dairy": 89.00,
+            ...
+        },
+        "by_nutrition": {
+            "A": 89.00,
+            "B": 167.00,
+            "C": 89.00,
+            "D": 56.00,
+            "E": 22.18,
+            "unknown": 0.00
+        }
+    }
+    """
+    from datetime import datetime
+    from decimal import Decimal
+    from collections import defaultdict
+
+    # Get parameters
+    year = request.GET.get('year', datetime.now().year)
+    month = request.GET.get('month', datetime.now().month)
+
+    try:
+        year = int(year)
+        month = int(month)
+    except (ValueError, TypeError):
+        return JsonResponse({'error': 'Invalid year or month'}, status=400)
+
+    if not (1 <= month <= 12):
+        return JsonResponse({'error': 'Month must be 1-12'}, status=400)
+
+    # Get user's family
+    try:
+        family_member = FamilyMember.objects.get(user=request.user)
+        family = family_member.family
+    except FamilyMember.DoesNotExist:
+        return JsonResponse({'error': 'User not in a family'}, status=404)
+
+    # Get all trips for this family in the specified month
+    trips = ShoppingTrip.objects.filter(
+        family=family,
+        trip_date__year=year,
+        trip_date__month=month
+    )
+
+    # Calculate totals
+    total_spent = Decimal('0.00')
+    by_store = defaultdict(Decimal)
+    by_category = defaultdict(Decimal)
+    by_nutrition = {
+        'A': Decimal('0.00'),
+        'B': Decimal('0.00'),
+        'C': Decimal('0.00'),
+        'D': Decimal('0.00'),
+        'E': Decimal('0.00'),
+        'unknown': Decimal('0.00')
+    }
+
+    for trip in trips:
+        # Add to total
+        if trip.total_amount:
+            trip_total = Decimal(str(trip.total_amount))
+            total_spent += trip_total
+
+            # By store
+            by_store[trip.store_name] += trip_total
+
+        # Process items for category and nutrition breakdown
+        for item in trip.items:
+            item_name = item.get('name', '')
+            item_category = item.get('category', 'Other')
+            item_price = item.get('price')
+            item_quantity = item.get('quantity', 1)
+
+            if item_price:
+                try:
+                    unit_price = Decimal(str(item_price))
+                    line_total = unit_price * Decimal(str(item_quantity))
+
+                    # By category
+                    by_category[item_category] += line_total
+
+                    # By nutrition - look up GroceryItem to get grade
+                    grocery_item = GroceryItem.objects.filter(
+                        name=item_name,
+                        store_name=trip.store_name
+                    ).first()
+
+                    if grocery_item and grocery_item.nutriscore_grade:
+                        grade = grocery_item.nutriscore_grade.upper()
+                        if grade in by_nutrition:
+                            by_nutrition[grade] += line_total
+                        else:
+                            by_nutrition['unknown'] += line_total
+                    else:
+                        by_nutrition['unknown'] += line_total
+
+                except (ValueError, TypeError, Decimal.InvalidOperation):
+                    continue
+
+    # Convert Decimal to float for JSON
+    response_data = {
+        'year': year,
+        'month': month,
+        'total_spent': float(total_spent),
+        'trip_count': trips.count(),
+        'by_store': {store: float(amount) for store, amount in by_store.items()},
+        'by_category': {cat: float(amount) for cat, amount in by_category.items()},
+        'by_nutrition': {grade: float(amount) for grade, amount in by_nutrition.items()}
+    }
+
+    logger.info(f"📊 Spending analytics for {family.name}: {year}-{month:02d} = ${total_spent}")
+
+    return JsonResponse(response_data)
