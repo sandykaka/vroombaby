@@ -3488,3 +3488,76 @@ def monthly_spending_api(request):
     logger.info(f"📊 Spending analytics for {family.name}: {year}-{month:02d} = ${total_spent}")
 
     return JsonResponse(response_data)
+
+
+@require_http_methods(["GET"])
+@require_firebase_auth
+def spending_trend_api(request):
+    """
+    Get 6-month spending trend
+
+    GET /shopright/api/spending/trend/
+
+    Returns:
+    {
+        "months": [
+            {"year": 2025, "month": 10, "label": "Oct", "total": 450.00},
+            {"year": 2025, "month": 11, "label": "Nov", "total": 520.00},
+            ...
+        ]
+    }
+    """
+    from datetime import datetime
+    from decimal import Decimal
+    import calendar
+
+    # Get user's family
+    try:
+        family_member = FamilyMember.objects.get(user=request.user)
+        family = family_member.family
+    except FamilyMember.DoesNotExist:
+        return JsonResponse({'error': 'User not in a family'}, status=404)
+
+    # Calculate last 6 months (including current month)
+    now = datetime.now()
+    months_data = []
+
+    for i in range(5, -1, -1):  # 6 months ago to now
+        # Calculate target month
+        target_month = now.month - i
+        target_year = now.year
+
+        # Handle year rollover
+        while target_month <= 0:
+            target_month += 12
+            target_year -= 1
+        while target_month > 12:
+            target_month -= 12
+            target_year += 1
+
+        # Get all trips for this family in this month
+        trips = ShoppingTrip.objects.filter(
+            family=family,
+            trip_date__year=target_year,
+            trip_date__month=target_month
+        )
+
+        # Calculate total for this month
+        total_spent = Decimal('0.00')
+        for trip in trips:
+            if trip.total_amount:
+                total_spent += Decimal(str(trip.total_amount))
+
+        # Get month abbreviation
+        month_label = calendar.month_abbr[target_month]
+
+        months_data.append({
+            'year': target_year,
+            'month': target_month,
+            'label': month_label,
+            'total': float(total_spent)
+        })
+
+    logger.info(f"📈 Spending trend for {family.name}: {len(months_data)} months")
+
+    return JsonResponse({'months': months_data})

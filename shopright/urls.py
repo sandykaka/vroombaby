@@ -50,5 +50,6 @@ urlpatterns = [
 
     # Budget/Spending Analytics
     path('api/spending/monthly/', views.monthly_spending_api, name='monthly_spending'),
+    path('api/spending/trend/', views.spending_trend_api, name='spending_trend'),
 ]
 
