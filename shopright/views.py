@@ -559,9 +559,24 @@ You are analyzing a grocery store receipt. Extract the following information:
    CRITICAL: Extract EVERY SINGLE LINE ITEM from the receipt. Scan the ENTIRE receipt carefully from top to bottom.
    Do NOT skip ANY items. Count each line carefully to ensure you capture everything.
 
-   Extract EACH LINE ITEM as it appears on the receipt.
-   If the same product appears on multiple separate lines, include it multiple times.
-   If one line shows a quantity (e.g., "3 @ $1.29"), extract it as ONE item with that quantity.
+   UNDERSTANDING RECEIPT LAYOUT (READ THIS FIRST):
+   ═══════════════════════════════════════════════════
+   Grocery receipts are VISUAL TABLES with columns:
+   - LEFT column: Item name
+   - RIGHT column: Price (right-aligned)
+   - Each item's price appears on THE SAME HORIZONTAL LINE as its name
+
+   Example receipt layout:
+   ┌─────────────────────────────────────────────┐
+   │ Banana Organic               $2.99          │  ← Item "Banana Organic" with price $2.99 on SAME line
+   │   0.5 lb @ $5.98/lb                         │  ← This is indented (breakdown), NOT a new item
+   │ Apple Fuji                   $3.49          │  ← Item "Apple Fuji" with price $3.49 on SAME line
+   │ Orange Navel                 $4.99          │  ← Item "Orange Navel" with price $4.99 on SAME line
+   └─────────────────────────────────────────────┘
+
+   GOLDEN RULE: The rightmost dollar amount on an item's line is THAT ITEM'S PRICE.
+   Do NOT take prices from lines above or below the item!
+   ═══════════════════════════════════════════════════
 
    For each line item, provide:
    - name: Product name WITHOUT size/quantity (e.g., "Horizon Organic Whole Milk" NOT "Horizon Organic Whole Milk 64oz")
@@ -571,67 +586,109 @@ You are analyzing a grocery store receipt. Extract the following information:
    - quantity: Number of units purchased (default is 1 if not specified)
    - category: Best-guess category (e.g., "Dairy", "Produce", "Meat", "Snacks", "Beverages", "Bakery", "Frozen", "Pantry")
 
-   CRITICAL - PRICE EXTRACTION RULES:
-   TWO TYPES OF ITEMS - extract price differently for each:
+   CRITICAL - PRICE MUST BE ON SAME LINE AS ITEM:
+   ════════════════════════════════════════════════
+   STEP 1: Locate the item name on the left
+   STEP 2: Look to the RIGHT on THE SAME HORIZONTAL LINE
+   STEP 3: The rightmost $ value on that line is the price
+
+   NEVER take the price from:
+   ✗ The line ABOVE the item
+   ✗ The line BELOW the item
+   ✗ A different item's line
+
+   ONLY exception: Multi-line items where 2nd line is INDENTED (starts with spaces)
+   ════════════════════════════════════════════════
+
+   TWO TYPES OF ITEMS - extract price differently:
 
    TYPE 1 - WEIGHTED ITEMS (produce, deli, meat sold by lb/kg):
    Format example:
-     Line 1: "Karela per lb    $1.24"
-     Line 2: "0.69 lb @ 1.79/lb"
-   → Extract price: "1.24" (the ACTUAL AMOUNT PAID from Line 1)
-   → Extract size: "0.69 lb" (optional, from Line 2)
+     Line 1: "Karela per lb               $1.24"     ← Price $1.24 is on THIS line
+     Line 2: "  0.69 lb @ 1.79/lb"                   ← Indented breakdown (NOT a new item)
+   → Extract price: "1.24" (from Line 1 - the ACTUAL AMOUNT PAID)
+   → Extract size: "0.69 lb" (from indented Line 2)
    → Extract quantity: 1
-   → IGNORE the unit price breakdown (1.79/lb) - this is NOT the price paid
+   → IGNORE the unit price (1.79/lb) - this is NOT what customer paid
 
    TYPE 2 - QUANTITY ITEMS (packaged items sold in multiples):
    Format example:
-     Line 1: "Avocado Large Eac    $3.87"
-     Line 2: "3 @ $1.29"
-   → Extract price: "1.29" (unit price per item)
+     Line 1: "Avocado Large Eac           $3.87"     ← Total paid is on THIS line
+     Line 2: "  3 @ $1.29"                           ← Indented breakdown showing unit price
+   → Extract price: "1.29" (unit price per item from indented Line 2)
    → Extract quantity: 3
-   → Total paid is 3 × $1.29 = $3.87
+   → Note: 3 × $1.29 = $3.87 (total on Line 1)
 
-   RULE: If you see BOTH a price on the item line AND a unit price breakdown on next line:
-   - Check if the breakdown shows "lb @", "kg @", or similar WEIGHT units → Use the FIRST price (Type 1)
-   - Check if the breakdown shows a simple quantity "X @" → Use the unit price from breakdown (Type 2)
+   VISUAL ALIGNMENT CHECK - DO THIS FOR EVERY ITEM:
+   ═════════════════════════════════════════════════
+   Before extracting price, ask yourself:
+   1. "Is this price on the SAME horizontal line as the item name?"
+   2. "Or am I accidentally looking at a price from the line above/below?"
+   3. "Is the next line indented? If yes, it's a breakdown. If no, it's a different item."
+
+   Common ERROR pattern to AVOID:
+   Receipt shows:
+   "Apple Fuji                   $3.99"     ← Different item
+   "Banana Organic              $2.99"     ← Extract $2.99 for THIS item
+   "Orange Navel                $4.49"     ← Different item
+
+   ✗ WRONG: Extracting $3.99 or $4.49 for Banana (from adjacent lines)
+   ✓ CORRECT: Extracting $2.99 for Banana (from SAME line)
+   ═════════════════════════════════════════════════
 
    IMPORTANT GUIDELINES:
    - BE THOROUGH: Scan the ENTIRE receipt carefully. Missing items is NOT acceptable.
    - Keep name and size SEPARATE. Do NOT include size information in the name field.
    - If no quantity is shown, default quantity to 1.
-   - Ignore other numbers below the item line (PLU codes, UPC codes, item numbers).
-   - "Eac", "Each", "EA" means the item is sold individually - do NOT include this in size.
-   - Look for items throughout the ENTIRE receipt, including items at the top, middle, and bottom of the list.
+   - Ignore other numbers (PLU codes, UPC codes, item numbers).
+   - "Eac", "Each", "EA" means sold individually - do NOT include this in size.
+   - Look for items throughout the ENTIRE receipt (top, middle, bottom).
 
    CRITICAL - PRICE ACCURACY:
    - DOUBLE-CHECK every price carefully. Price accuracy is CRITICAL.
+   - Verify each price is from THE SAME LINE as the item name.
    - Be extremely careful with similar-looking digits: 7 vs 9, 0 vs 8, 1 vs 7, 5 vs 6, 3 vs 8
-   - If a price looks unclear, examine the context (nearby prices, item type, receipt layout) to determine the correct value
-   - Verify your extracted prices are reasonable for grocery items (e.g., $4.79 is more common than $4.99 for some items)
-   - After extraction, mentally verify that item prices roughly add up to the total shown on receipt
+   - After extraction, mentally verify that item prices roughly add up to the total shown on receipt.
 
-   Examples:
-   - Receipt shows "Bananas 1 lb    $2.99" → name: "Bananas", size: "1 lb", price: "2.99", quantity: 1
-   - Receipt shows "Milk Gallon Whole 64oz    $4.99" → name: "Milk Gallon Whole", size: "64oz", price: "4.99", quantity: 1
+   Complete Examples with Visual Spacing:
+   ─────────────────────────────────────
+   Example 1 - Simple item:
+   Receipt: "Banana Organic              $2.99"
+   → name: "Banana Organic", price: "2.99", quantity: 1
+   (Price $2.99 is on SAME line as item)
 
-   - Receipt shows:
-     Line 1: "Karela per lb    $1.24"
-     Line 2: "0.69 lb @ 1.79/lb"
-     → name: "Karela per lb", size: "0.69 lb", price: "1.24", quantity: 1
-     (Use $1.24 from Line 1, NOT $1.79 from breakdown)
+   Example 2 - Weighted item:
+   Receipt:
+   "Karela per lb               $1.24"
+   "  0.69 lb @ 1.79/lb"
+   → name: "Karela per lb", size: "0.69 lb", price: "1.24", quantity: 1
+   (Price $1.24 from first line - actual amount paid, NOT $1.79 unit price)
 
-   - Receipt shows:
-     Line 1: "Avocado Large Eac    $3.87"
-     Line 2: "3 @ $1.29"
-     → name: "Avocado Large", size: "", price: "1.29", quantity: 3
-     (Use $1.29 unit price from Line 2, NOT $3.87 total)
+   Example 3 - Quantity item:
+   Receipt:
+   "Avocado Large Eac           $3.87"
+   "  3 @ $1.29"
+   → name: "Avocado Large", price: "1.29", quantity: 3
+   (Unit price $1.29 from indented breakdown line, NOT $3.87 total)
 
-   - If receipt shows "Carrots $1.99" on two separate lines, extract as TWO separate items each with quantity: 1
+   Example 4 - Multiple items (avoid adjacent line confusion):
+   Receipt:
+   "Apple Fuji                  $3.99"
+   "Banana Organic              $2.99"
+   "Orange Navel                $4.49"
+   → Extract 3 separate items:
+     1. "Apple Fuji" with price "3.99"
+     2. "Banana Organic" with price "2.99" (NOT 3.99 or 4.49!)
+     3. "Orange Navel" with price "4.49"
 
 3. Receipt totals:
    - total_amount: Total amount paid (final total after tax)
 
-BEFORE returning your response, double-check that you've captured EVERY item on the receipt.
+FINAL VERIFICATION - BEFORE RETURNING JSON:
+1. Did you extract EVERY item from the receipt?
+2. Is each price from THE SAME LINE as the item name?
+3. Did you avoid taking prices from adjacent lines?
+4. Do the prices roughly add up to the receipt total?
 
 Return ONLY a valid JSON object with this structure:
 {
