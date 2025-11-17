@@ -647,8 +647,33 @@ You are analyzing a grocery store receipt. Extract the following information:
    CRITICAL - PRICE ACCURACY:
    - DOUBLE-CHECK every price carefully. Price accuracy is CRITICAL.
    - Verify each price is from THE SAME LINE as the item name.
-   - Be extremely careful with similar-looking digits: 7 vs 9, 0 vs 8, 1 vs 7, 5 vs 6, 3 vs 8
+   - Be extremely careful with similar-looking digits: **4 vs 9** (most common on thermal receipts), 0 vs 8, 1 vs 7, 5 vs 6, 3 vs 8, 7 vs 9
    - After extraction, mentally verify that item prices roughly add up to the total shown on receipt.
+
+   THERMAL RECEIPT OCR CHALLENGES:
+   ═══════════════════════════════════════════════════
+   WARNING: This may be a THERMAL RECEIPT (faded print, lower quality).
+   Thermal receipts are notorious for poor OCR due to fading over time.
+
+   Pay EXTRA attention to these commonly confused digits:
+   - **4 vs 9** (MOST COMMON ERROR - very similar when faded)
+     Example: $2.49 can look like $2.99, $3.49 can look like $3.99
+   - 0 vs 8 (circles vs figure-8)
+   - 1 vs 7 (straight line vs angled)
+   - 5 vs 6 (top loop difference)
+   - 3 vs 8 (curves vs loops)
+
+   DIGIT-BY-DIGIT VERIFICATION:
+   Before recording ANY price, examine each digit individually:
+   1. Look at the SHAPE of each digit carefully
+   2. If a digit looks ambiguous, use context clues:
+      - Does $X.49 or $X.99 make more sense for this item?
+      - Are there similar items nearby with .49 or .99 prices?
+      - Produce/basic items often end in .49, .79, .99
+   3. When in doubt between 4 and 9, examine the digit's TOP:
+      - "4" has an OPEN top (looks like ">4")
+      - "9" has a CLOSED loop at top (looks like a balloon)
+   ═══════════════════════════════════════════════════
 
    Complete Examples with Visual Spacing:
    ─────────────────────────────────────
@@ -684,11 +709,37 @@ You are analyzing a grocery store receipt. Extract the following information:
 3. Receipt totals:
    - total_amount: Total amount paid (final total after tax)
 
+MANDATORY SELF-CHECK - DO THIS BEFORE RETURNING JSON:
+════════════════════════════════════════════════════
+Go through EACH extracted item and verify all 4 checks:
+
+For EVERY item, ask yourself:
+1. ✓ SAME LINE CHECK: Is this price from the SAME horizontal line as the item name?
+   - NOT from the line above?
+   - NOT from the line below?
+   - NOT from an indented breakdown line (unless it's a quantity breakdown)?
+
+2. ✓ DIGIT CHECK: Did I carefully examine each digit for 4 vs 9 confusion?
+   - Does $X.49 or $X.99 make more sense for this item?
+   - Did I look at the TOP of ambiguous digits (4 = open, 9 = closed loop)?
+
+3. ✓ REASONABLENESS CHECK: Does this price make sense?
+   - Produce items: Usually $0.50 - $5.00
+   - Packaged items: Usually $2.00 - $8.00
+   - If price seems too high/low, re-examine
+
+4. ✓ TOTAL CHECK: Do all prices add up to roughly the receipt total?
+   - Calculate sum of (price × quantity) for all items
+   - Should be close to the total_amount shown on receipt
+
+If ANY check fails for ANY item, STOP and RE-EXAMINE that item!
+════════════════════════════════════════════════════
+
 FINAL VERIFICATION - BEFORE RETURNING JSON:
 1. Did you extract EVERY item from the receipt?
-2. Is each price from THE SAME LINE as the item name?
-3. Did you avoid taking prices from adjacent lines?
-4. Do the prices roughly add up to the receipt total?
+2. Did you complete the 4-point SELF-CHECK above for EACH item?
+3. Did you re-examine any items that failed checks?
+4. Are you confident all prices are accurate (no 4↔9 confusion, no adjacent line errors)?
 
 Return ONLY a valid JSON object with this structure:
 {
