@@ -986,6 +986,7 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
         normalized_size = normalize_weighted_item_size(size)
 
         # STEP 2A: Find or create store-specific GroceryItem (using normalized size)
+        # First try: EXACT match on name+brand+size
         grocery_item = GroceryItem.objects.filter(
             name__iexact=name,
             brand__iexact=brand,
@@ -993,8 +994,23 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
             store_name=store_name  # Filter by store!
         ).first()
 
+        # Fallback: If brand/size empty AND no exact match, try fuzzy name-only match
+        if not grocery_item and (not brand or not normalized_size):
+            # Brand or size missing from receipt - do fuzzy name-only match
+            # This prevents duplicates when OpenAI doesn't extract complete data
+            grocery_item = GroceryItem.objects.filter(
+                name__iexact=name,
+                store_name=store_name
+            ).order_by(
+                '-enriched_from_barcode',  # Prioritize items with barcode data (more trustworthy)
+                '-times_purchased'          # Then by popularity
+            ).first()
+
+            if grocery_item:
+                logger.info(f"📍 Fuzzy matched '{name}' to existing item: brand='{grocery_item.brand}', size='{grocery_item.size}' (barcode={bool(grocery_item.barcode)})")
+
         if not grocery_item:
-            # Create new store-specific grocery item (with normalized size)
+            # No match found - create new store-specific grocery item (with normalized size)
             grocery_item = GroceryItem.objects.create(
                 name=name,
                 brand=brand,
@@ -1012,12 +1028,25 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
 
         # STEP 2B: Try to find existing item still in "Need to Buy" (not bought yet)
         # Note: We match on NORMALIZED size here too, so weighted items don't duplicate
+        # First try: EXACT match on name+brand+size
         existing_item = shopping_list.list_items.filter(
             name=name,
             brand=brand,
             size=normalized_size,  # Use normalized size for matching
             is_checked=False  # Items still in "Need to Buy" from previous weeks
         ).first()
+
+        # Fallback: If brand/size empty AND no exact match, try fuzzy name-only match
+        if not existing_item and (not brand or not normalized_size):
+            # Brand or size missing from receipt - do fuzzy name-only match
+            # This prevents duplicate list items when OpenAI doesn't extract complete data
+            existing_item = shopping_list.list_items.filter(
+                name__iexact=name,
+                is_checked=False
+            ).order_by('-purchase_count', '-last_purchased_date').first()
+
+            if existing_item:
+                logger.info(f"📍 Fuzzy matched list item '{name}' to existing entry: brand='{existing_item.brand}', size='{existing_item.size}'")
 
         if existing_item:
             # Item already exists in "Need to Buy" - just update price/tracking info
