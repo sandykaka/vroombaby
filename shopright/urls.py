@@ -28,6 +28,7 @@ urlpatterns = [
 
     # Barcode Scanning
     path('api/scan-barcode/', views.scan_barcode_api, name='scan_barcode'),
+    path('api/confirm-barcode/', views.confirm_barcode_api, name='confirm_barcode'),  # User confirms mismatch
     path('api/lookup-barcode/', views.lookup_barcode_api, name='lookup_barcode'),  # Standalone nutrition lookup
     path('api/upload-product-photo/', views.upload_product_photo_api, name='upload_product_photo'),
     path('api/report-wrong-image/', views.report_wrong_image_api, name='report_wrong_image'),
@@ -51,5 +52,8 @@ urlpatterns = [
     # Budget/Spending Analytics
     path('api/spending/monthly/', views.monthly_spending_api, name='monthly_spending'),
     path('api/spending/trend/', views.spending_trend_api, name='spending_trend'),
+
+    # Price Comparison (Barcode-First Matching)
+    path('api/price-comparison/batch/', views.batch_price_comparison_api, name='batch_price_comparison'),
 ]
 

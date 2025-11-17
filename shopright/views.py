@@ -1998,10 +1998,34 @@ def scan_barcode_api(request):
     ).first()
 
     if grocery_item:
-        # Barcode already scanned for this store - just link it!
+        # Barcode already scanned for this store - validate match before linking!
         logger.info(f"✅ Barcode {barcode} already exists for {store_name} (enriched by {grocery_item.first_enriched_by})")
 
-        # Link this user's list item to existing item
+        # VALIDATION: Check if product name matches list item name
+        match_result = fuzzy_match_product_names(list_item.name, grocery_item.name)
+        logger.info(f"🔍 Fuzzy match: {match_result['confidence']}% - {match_result['reason']}")
+
+        if not match_result['match'] or match_result['confidence'] < 70:
+            # LOW CONFIDENCE - Return validation failure for user confirmation
+            logger.warning(f"⚠️ Low confidence match ({match_result['confidence']}%) - requiring user confirmation")
+            return JsonResponse({
+                'success': False,
+                'needs_confirmation': True,
+                'match_result': match_result,
+                'product_data': {
+                    'product_name': grocery_item.name,
+                    'brand': grocery_item.brand,
+                    'image_url': grocery_item.image_url,
+                    'quantity': grocery_item.size
+                },
+                'list_item_name': list_item.name,
+                'message': 'Product name mismatch detected. Please confirm if this is correct.',
+                # Send barcode back so iOS can call confirm endpoint
+                'barcode': barcode,
+                'list_item_id': list_item_id
+            }, status=400)
+
+        # HIGH CONFIDENCE - Proceed with linking
         list_item.grocery_item = grocery_item
         list_item.save()
 
@@ -2048,11 +2072,112 @@ def scan_barcode_api(request):
     product_data = lookup_barcode_in_openfoodfacts(barcode)
 
     if not product_data.get('found'):
+        # OpenFoodFacts API failed/timed out - create PARTIAL grocery item anyway
+        # This saves the barcode for the community and lets user add photo manually
+        logger.warning(f"⚠️ OpenFoodFacts lookup failed for {barcode} - creating partial item")
+
+        from django.utils import timezone
+        from django.db.models import Q
+
+        # Check if item with same name+store exists WITHOUT barcode
+        existing_item = GroceryItem.objects.filter(
+            name=list_item.name,
+            store_name=store_name
+        ).filter(
+            Q(barcode__isnull=True) | Q(barcode='')
+        ).first()
+
+        if existing_item:
+            # UPDATE existing item with barcode (but mark as needing enrichment)
+            logger.info(f"🔗 Updating existing item with barcode (partial): {existing_item.name} @ {store_name}")
+            existing_item.barcode = barcode
+            existing_item.enriched_from_barcode = True
+            existing_item.needs_enrichment = True  # Flag for retry later
+            existing_item.first_enriched_by = request.user
+            existing_item.first_enriched_at = timezone.now()
+            existing_item.save()
+            grocery_item = existing_item
+        else:
+            # CREATE new partial item (barcode + list item name only)
+            grocery_item = GroceryItem.objects.create(
+                name=list_item.name,
+                brand=list_item.brand or '',
+                size=list_item.size or '',
+                store_name=store_name,
+                category=list_item.category or '',
+                barcode=barcode,
+                image_url='',  # No image from API
+                enriched_from_barcode=True,
+                needs_enrichment=True,  # Flag for retry later
+                first_enriched_by=request.user,
+                first_enriched_at=timezone.now()
+            )
+            logger.info(f"🎉 NEW partial product (barcode only): {grocery_item.name} (barcode {barcode}) by {request.user.username}")
+
+        # Link this list item to the grocery item
+        list_item.grocery_item = grocery_item
+        list_item.save()
+
+        # Count families helped (same store only)
+        potential_matches = ShoppingListItem.objects.filter(
+            name__icontains=grocery_item.name[:20],
+            grocery_item__isnull=True,
+            shopping_list__store_name=store_name
+        ).exclude(shopping_list__family=list_item.shopping_list.family)
+        families_helped = potential_matches.values('shopping_list__family').distinct().count()
+
+        # Return success response (but with has_image=False to trigger photo prompt)
+        response_data = {
+            'success': True,
+            'message': f'Product saved! Image not available - you can add a photo. Helped {families_helped} families.' if families_helped > 0 else 'Product saved! Image not available - you can add a photo.',
+            'product_data': {
+                'product_name': list_item.name,  # Use list item name since API failed
+                'brand': list_item.brand or '',
+                'image_url': '',  # No image
+                'quantity': list_item.size or '',
+                'categories': list_item.category or '',
+            },
+            'grocery_item_id': grocery_item.id,
+            'families_helped': families_helped,
+            'already_existed': False,
+            'has_image': False,  # CRITICAL: This triggers photo prompt in iOS
+            'enriched_by': request.user.username,
+            'nutrition': None  # No nutrition data from API
+        }
+
+        response = JsonResponse(response_data)
+        response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response['Pragma'] = 'no-cache'
+        response['Expires'] = '0'
+        return response
+
+    # VALIDATION: Check if scanned product matches list item BEFORE creating database entry
+    scanned_product_name = product_data.get('product_name', '')
+    match_result = fuzzy_match_product_names(list_item.name, scanned_product_name)
+    logger.info(f"🔍 New barcode fuzzy match: {match_result['confidence']}% - {match_result['reason']}")
+
+    if not match_result['match'] or match_result['confidence'] < 70:
+        # LOW CONFIDENCE - Return validation failure for user confirmation
+        logger.warning(f"⚠️ Low confidence match ({match_result['confidence']}%) - requiring user confirmation")
         return JsonResponse({
             'success': False,
-            'error': 'Product not found in database. Try taking a photo instead.'
-        }, status=404)
+            'needs_confirmation': True,
+            'match_result': match_result,
+            'product_data': {
+                'product_name': scanned_product_name,
+                'brand': product_data.get('brand', ''),
+                'image_url': product_data.get('image_url', ''),
+                'quantity': product_data.get('quantity', ''),
+                'categories': product_data.get('categories', ''),
+            },
+            'list_item_name': list_item.name,
+            'message': 'Product name mismatch detected. Please confirm if this is correct.',
+            # Send barcode back so iOS can call confirm endpoint
+            'barcode': barcode,
+            'list_item_id': list_item_id
+        }, status=400)
 
+    # HIGH CONFIDENCE - Proceed with creating/updating grocery item
     # Create NEW store-specific grocery item (first time this barcode is scanned at this store!)
     # Use list_item.name (receipt name) so receipts can find it via exact match
     from django.utils import timezone
@@ -2156,6 +2281,273 @@ def scan_barcode_api(request):
     }
 
     # Return with anti-caching headers (prevent AWS ELB, iOS URLSession, etc. from caching)
+    response = JsonResponse(response_data)
+    response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
+    return response
+
+
+@csrf_exempt
+@require_firebase_auth
+def confirm_barcode_api(request):
+    """
+    Confirm and save barcode after user manually approves mismatch
+    This endpoint SKIPS fuzzy matching validation since user already confirmed "This is Correct"
+
+    POST /shopright/api/confirm-barcode/
+    Body: {
+        "list_item_id": 789,
+        "barcode": "012345678901"
+    }
+
+    Returns: Same as scan_barcode_api (success response)
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    list_item_id = data.get('list_item_id')
+    barcode = data.get('barcode', '').strip()
+
+    if not list_item_id or not barcode:
+        return JsonResponse({'error': 'Missing list_item_id or barcode'}, status=400)
+
+    # Get the list item
+    try:
+        list_item = ShoppingListItem.objects.get(id=list_item_id)
+    except ShoppingListItem.DoesNotExist:
+        return JsonResponse({'error': 'List item not found'}, status=404)
+
+    store_name = list_item.shopping_list.store_name
+
+    # Check if barcode already exists for THIS STORE
+    grocery_item = GroceryItem.objects.filter(
+        barcode=barcode,
+        store_name=store_name
+    ).first()
+
+    if grocery_item:
+        # Barcode already exists - link it (NO VALIDATION - user confirmed)
+        logger.info(f"✅ [CONFIRMED] Linking barcode {barcode} to list item '{list_item.name}' (existing item: '{grocery_item.name}')")
+
+        list_item.grocery_item = grocery_item
+        list_item.save()
+
+        # Count how many families could benefit
+        potential_matches = ShoppingListItem.objects.filter(
+            name__icontains=grocery_item.name[:20],
+            grocery_item__isnull=True,
+            shopping_list__store_name=store_name
+        ).exclude(shopping_list__family=list_item.shopping_list.family)
+        families_helped = potential_matches.values('shopping_list__family').distinct().count()
+
+        # Build response
+        response_data = {
+            'success': True,
+            'message': 'Product confirmed and linked!',
+            'product_data': {
+                'product_name': grocery_item.name,
+                'brand': grocery_item.brand,
+                'image_url': grocery_item.image_url,
+                'quantity': grocery_item.size
+            },
+            'grocery_item_id': grocery_item.id,
+            'families_helped': families_helped,
+            'already_existed': True,
+            'has_image': bool(grocery_item.image_url and grocery_item.image_url.strip()),
+            'enriched_by': grocery_item.first_enriched_by.username if grocery_item.first_enriched_by else 'community',
+            'nutrition': {
+                'nutriscore_grade': grocery_item.nutriscore_grade,
+                'nova_group': grocery_item.nova_group,
+                'has_nutrition_data': True if grocery_item.nutrition_data else False,
+                'nutrients': grocery_item.nutrition_data.get('nutrients') if grocery_item.nutrition_data else None
+            } if (grocery_item.nutriscore_grade or grocery_item.nova_group) else None
+        }
+
+        response = JsonResponse(response_data)
+        response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response['Pragma'] = 'no-cache'
+        response['Expires'] = '0'
+        return response
+
+    # Barcode NOT in database - fetch from API and create (NO VALIDATION - user confirmed)
+    product_data = lookup_barcode_in_openfoodfacts(barcode)
+
+    if not product_data.get('found'):
+        # OpenFoodFacts API failed - but user CONFIRMED it's correct, so create partial item
+        logger.warning(f"⚠️ [CONFIRMED] OpenFoodFacts lookup failed for {barcode} - creating partial item anyway")
+
+        from django.utils import timezone
+        from django.db.models import Q
+
+        # Check if item with same name+store exists WITHOUT barcode
+        existing_item = GroceryItem.objects.filter(
+            name=list_item.name,
+            store_name=store_name
+        ).filter(
+            Q(barcode__isnull=True) | Q(barcode='')
+        ).first()
+
+        if existing_item:
+            # UPDATE existing item with barcode
+            logger.info(f"🔗 [CONFIRMED] Updating existing item with barcode (partial): {existing_item.name} @ {store_name}")
+            existing_item.barcode = barcode
+            existing_item.enriched_from_barcode = True
+            existing_item.needs_enrichment = True
+            existing_item.first_enriched_by = request.user
+            existing_item.first_enriched_at = timezone.now()
+            existing_item.save()
+            grocery_item = existing_item
+        else:
+            # CREATE new partial item
+            grocery_item = GroceryItem.objects.create(
+                name=list_item.name,
+                brand=list_item.brand or '',
+                size=list_item.size or '',
+                store_name=store_name,
+                category=list_item.category or '',
+                barcode=barcode,
+                image_url='',
+                enriched_from_barcode=True,
+                needs_enrichment=True,
+                first_enriched_by=request.user,
+                first_enriched_at=timezone.now()
+            )
+            logger.info(f"🎉 [CONFIRMED] NEW partial product: {grocery_item.name} (barcode {barcode}) by {request.user.username}")
+
+        # Link this list item to the grocery item
+        list_item.grocery_item = grocery_item
+        list_item.save()
+
+        # Count families helped
+        potential_matches = ShoppingListItem.objects.filter(
+            name__icontains=grocery_item.name[:20],
+            grocery_item__isnull=True,
+            shopping_list__store_name=store_name
+        ).exclude(shopping_list__family=list_item.shopping_list.family)
+        families_helped = potential_matches.values('shopping_list__family').distinct().count()
+
+        # Return success response (with has_image=False to trigger photo prompt)
+        response_data = {
+            'success': True,
+            'message': f'Product confirmed! Image not available - you can add a photo. Helped {families_helped} families.' if families_helped > 0 else 'Product confirmed! Image not available - you can add a photo.',
+            'product_data': {
+                'product_name': list_item.name,
+                'brand': list_item.brand or '',
+                'image_url': '',
+                'quantity': list_item.size or '',
+                'categories': list_item.category or '',
+            },
+            'grocery_item_id': grocery_item.id,
+            'families_helped': families_helped,
+            'already_existed': False,
+            'has_image': False,  # Triggers photo prompt
+            'nutrition': None
+        }
+
+        response = JsonResponse(response_data)
+        response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response['Pragma'] = 'no-cache'
+        response['Expires'] = '0'
+        return response
+
+    logger.info(f"✅ [CONFIRMED] Creating new barcode item '{list_item.name}' (scanned: '{product_data.get('product_name')}')")
+
+    # Create NEW store-specific grocery item (user confirmed it's correct)
+    from django.utils import timezone
+
+    # Determine brand
+    api_brand = product_data.get('brand', '').strip()
+    item_brand = list_item.brand or ''
+    final_brand = api_brand if api_brand else item_brand
+
+    # Check if item with same name+store exists WITHOUT barcode
+    from django.db.models import Q
+    existing_item = GroceryItem.objects.filter(
+        name=list_item.name,
+        store_name=store_name
+    ).filter(
+        Q(barcode__isnull=True) | Q(barcode='')
+    ).first()
+
+    if existing_item:
+        # UPDATE existing item with barcode data
+        logger.info(f"🔗 [CONFIRMED] Updating existing item with barcode: {existing_item.name} @ {store_name}")
+        existing_item.barcode = barcode
+        existing_item.brand = final_brand
+        existing_item.size = product_data.get('quantity', list_item.size)
+        existing_item.image_url = product_data.get('image_url', '')
+        existing_item.category = list_item.category or existing_item.category
+        existing_item.enriched_from_barcode = True
+        existing_item.first_enriched_by = request.user
+        existing_item.first_enriched_at = timezone.now()
+        existing_item.save()
+        grocery_item = existing_item
+    else:
+        # CREATE new item
+        grocery_item = GroceryItem.objects.create(
+            name=list_item.name,
+            brand=final_brand,
+            size=product_data.get('quantity', list_item.size),
+            store_name=store_name,
+            category=list_item.category,
+            barcode=barcode,
+            image_url=product_data.get('image_url', ''),
+            enriched_from_barcode=True,
+            first_enriched_by=request.user,
+            first_enriched_at=timezone.now()
+        )
+        logger.info(f"🎉 [CONFIRMED] NEW product: {grocery_item.name} (barcode {barcode}) by {request.user.username}")
+
+    # Link this list item to the grocery item
+    list_item.grocery_item = grocery_item
+    if product_data.get('brand'):
+        list_item.brand = product_data['brand']
+    list_item.save()
+
+    # Fetch nutrition data
+    openfoodfacts_service = get_openfoodfacts_service()
+    nutrition_enriched = openfoodfacts_service.enrich_grocery_item(grocery_item)
+
+    if nutrition_enriched:
+        logger.info(f"✅ Fetched nutrition for {grocery_item.name}: Nutri-Score {grocery_item.nutriscore_grade.upper() if grocery_item.nutriscore_grade else 'N/A'}")
+
+    # Count families helped
+    potential_matches = ShoppingListItem.objects.filter(
+        name__icontains=grocery_item.name[:20],
+        grocery_item__isnull=True,
+        shopping_list__store_name=store_name
+    ).exclude(shopping_list__family=list_item.shopping_list.family)
+    families_helped = potential_matches.values('shopping_list__family').distinct().count()
+
+    # Build response
+    response_data = {
+        'success': True,
+        'message': f'Product confirmed! You helped {families_helped} other families.' if families_helped > 0 else 'Product confirmed and added to database!',
+        'product_data': {
+            'product_name': product_data.get('product_name', ''),
+            'brand': product_data.get('brand', ''),
+            'image_url': product_data.get('image_url', ''),
+            'quantity': product_data.get('quantity', ''),
+            'categories': product_data.get('categories', ''),
+        },
+        'grocery_item_id': grocery_item.id,
+        'families_helped': families_helped,
+        'already_existed': False,
+        'has_image': bool(grocery_item.image_url and grocery_item.image_url.strip()),
+        'nutrition': {
+            'nutriscore_grade': grocery_item.nutriscore_grade,
+            'nova_group': grocery_item.nova_group,
+            'has_nutrition_data': True if grocery_item.nutrition_data else False,
+            'nutrients': grocery_item.nutrition_data.get('nutrients') if grocery_item.nutrition_data else None
+        } if nutrition_enriched else None
+    }
+
     response = JsonResponse(response_data)
     response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     response['Pragma'] = 'no-cache'
@@ -3669,3 +4061,217 @@ def spending_trend_api(request):
     logger.info(f"📈 Spending trend for {family.name}: {len(months_data)} months")
 
     return JsonResponse({'months': months_data})
+
+
+# ========================================
+# PRICE COMPARISON API (Barcode-First Matching)
+# ========================================
+
+@csrf_exempt
+@require_firebase_auth
+def batch_price_comparison_api(request):
+    """
+    Compare prices for multiple items across stores using barcode matching
+
+    POST /shopright/api/price-comparison/batch/
+    Body: {
+        "grocery_item_ids": [123, 456, 789, ...]
+    }
+
+    Returns: {
+        "comparisons": [
+            {
+                "grocery_item_id": 123,
+                "current_price": 4.99,
+                "current_store": "Trader Joe's",
+                "cheapest_store": "Walmart",
+                "cheapest_price": 2.99,
+                "savings": 2.00,
+                "match_method": "barcode",  # or "name"
+                "has_barcode": true
+            },
+            ...
+        ],
+        "total_savings": 12.50,
+        "items_compared": 8,
+        "items_with_savings": 3
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    grocery_item_ids = data.get('grocery_item_ids', [])
+
+    if not grocery_item_ids:
+        return JsonResponse({'error': 'Missing grocery_item_ids'}, status=400)
+
+    from datetime import timedelta
+    from decimal import Decimal
+
+    # Fetch all items in one query
+    items = GroceryItem.objects.filter(id__in=grocery_item_ids)
+
+    comparisons = []
+    total_savings = Decimal('0.00')
+    items_compared = 0
+    items_with_savings = 0
+
+    # Time window for recent prices (30 days)
+    thirty_days_ago = datetime.now() - timedelta(days=30)
+
+    for item in items:
+        comparison = _compare_single_item_price(item, thirty_days_ago)
+
+        if comparison:
+            comparisons.append(comparison)
+            items_compared += 1
+
+            if comparison['savings'] > 0:
+                total_savings += Decimal(str(comparison['savings']))
+                items_with_savings += 1
+
+    logger.info(f"💰 Price comparison for {request.user.username}: {items_compared} items, {items_with_savings} with savings, total savings ${total_savings}")
+
+    return JsonResponse({
+        'comparisons': comparisons,
+        'total_savings': float(total_savings),
+        'items_compared': items_compared,
+        'items_with_savings': items_with_savings
+    })
+
+
+def _compare_single_item_price(reference_item, thirty_days_ago):
+    """
+    Helper function to compare price for a single grocery item
+    Uses barcode matching first, falls back to name matching
+
+    Returns: {
+        'grocery_item_id': 123,
+        'current_price': 4.99,
+        'current_store': 'Trader Joe\'s',
+        'cheapest_store': 'Walmart',
+        'cheapest_price': 2.99,
+        'savings': 2.00,
+        'match_method': 'barcode',
+        'has_barcode': True
+    }
+    or None if no comparison data available
+    """
+    # STEP 1: Try barcode matching first (most accurate)
+    if reference_item.barcode:
+        same_product_all_stores = GroceryItem.objects.filter(
+            barcode=reference_item.barcode
+        ).exclude(
+            store_name=reference_item.store_name  # Exclude current store
+        )
+        match_method = 'barcode'
+
+        logger.debug(f"🔍 Barcode match: {reference_item.name} found at {same_product_all_stores.count()} other stores")
+
+    # STEP 2: Fallback to name+brand+size matching (less accurate, for items without barcodes)
+    else:
+        same_product_all_stores = GroceryItem.objects.filter(
+            name__iexact=reference_item.name,
+            brand__iexact=reference_item.brand,
+            size__iexact=reference_item.size
+        ).exclude(store_name=reference_item.store_name)
+        match_method = 'name'
+
+        logger.debug(f"📝 Name match: {reference_item.name} found at {same_product_all_stores.count()} other stores")
+
+    # No other stores selling this item
+    if not same_product_all_stores.exists():
+        return None
+
+    # Extract prices from recent ShoppingTrip receipts
+    price_data = []
+
+    for other_store_item in same_product_all_stores:
+        # Find most recent purchase of this item at this store
+        recent_trips = ShoppingTrip.objects.filter(
+            store_name=other_store_item.store_name,
+            trip_date__gte=thirty_days_ago
+        ).order_by('-trip_date')
+
+        # Search for this item in trip.items JSONField
+        for trip in recent_trips:
+            found_price = None
+
+            for receipt_item in trip.items:
+                # Match by name (barcode not stored in receipt items currently)
+                if receipt_item.get('name', '').lower() == reference_item.name.lower():
+                    price_str = receipt_item.get('price', '')
+                    if price_str:
+                        try:
+                            found_price = float(price_str.replace('$', '').replace(',', ''))
+                            break
+                        except ValueError:
+                            continue
+
+            if found_price is not None:
+                price_data.append({
+                    'store_name': other_store_item.store_name,
+                    'price': found_price,
+                    'last_seen': trip.trip_date.isoformat()
+                })
+                break  # Found price at this store, move to next store
+
+    # No price data found from recent receipts
+    if not price_data:
+        return None
+
+    # Find cheapest price
+    cheapest = min(price_data, key=lambda x: x['price'])
+
+    # Get current item's price (from most recent receipt or GroceryItem record)
+    current_price = None
+    if reference_item.price:
+        try:
+            current_price = float(reference_item.price.replace('$', '').replace(',', ''))
+        except (ValueError, AttributeError):
+            pass
+
+    # If no price in GroceryItem, try to find from recent receipts
+    if current_price is None:
+        recent_trip = ShoppingTrip.objects.filter(
+            store_name=reference_item.store_name,
+            trip_date__gte=thirty_days_ago
+        ).order_by('-trip_date').first()
+
+        if recent_trip:
+            for receipt_item in recent_trip.items:
+                if receipt_item.get('name', '').lower() == reference_item.name.lower():
+                    price_str = receipt_item.get('price', '')
+                    if price_str:
+                        try:
+                            current_price = float(price_str.replace('$', '').replace(',', ''))
+                            break
+                        except ValueError:
+                            continue
+
+    # Can't compare without current price
+    if current_price is None:
+        return None
+
+    # Calculate savings
+    savings = max(0, current_price - cheapest['price'])  # Only positive savings
+
+    # Only return comparison if there are actual savings (threshold: $0.10 to avoid noise)
+    if savings < 0.10:
+        return None
+
+    return {
+        'grocery_item_id': reference_item.id,
+        'current_price': round(current_price, 2),
+        'current_store': reference_item.store_name,
+        'cheapest_store': cheapest['store_name'],
+        'cheapest_price': round(cheapest['price'], 2),
+        'savings': round(savings, 2),
+        'match_method': match_method,
+        'has_barcode': bool(reference_item.barcode)
+    }

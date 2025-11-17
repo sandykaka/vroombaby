@@ -78,6 +78,7 @@ class GroceryItem(models.Model):
 
     # Crowdsourced data
     enriched_from_barcode = models.BooleanField(default=False)  # Was barcode scanned?
+    needs_enrichment = models.BooleanField(default=False)  # Barcode saved but OpenFoodFacts API failed - needs retry
     first_enriched_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
