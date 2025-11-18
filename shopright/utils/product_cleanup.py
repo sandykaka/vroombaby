@@ -158,10 +158,6 @@ def should_extract_size(name: str, size: str) -> bool:
     if not name:
         return False
 
-    # If size is already meaningful, no extraction needed
-    if size and size.lower() not in ("ea", "each", "eac", "1 ea", "1 each"):
-        return False
-
     # Check if name contains size patterns
     size_pattern = re.compile(
         r'\d+\.?\d*\s*(?:oz|lb|ct|count|ml|l|kg|g|gal|gallon|qt|quart|pt|pint|fl\s*oz|pack|pk)\s*$',
@@ -173,4 +169,30 @@ def should_extract_size(name: str, size: str) -> bool:
         re.IGNORECASE
     )
 
-    return bool(size_pattern.search(name) or size_word_pattern.search(name))
+    # First check if name contains size patterns
+    name_has_size = bool(size_pattern.search(name) or size_word_pattern.search(name))
+
+    if not name_has_size:
+        return False  # Name doesn't have size info, nothing to extract
+
+    # Name has size pattern - check if we should extract it
+    # Extract if:
+    # 1. Size field is empty/minimal ("ea", "each", etc.)
+    # 2. OR size field is a normalized weighted item ("per lb", "per oz", etc.)
+    #    because the actual weight is stuck in the name
+
+    if not size:
+        return True  # Size is empty, definitely extract from name
+
+    size_lower = size.lower().strip()
+
+    # Minimal/placeholder sizes - extract from name
+    if size_lower in ("ea", "each", "eac", "1 ea", "1 each"):
+        return True
+
+    # Normalized weighted item sizes - actual weight is in name, should extract
+    if size_lower.startswith("per "):  # "per lb", "per oz", "per kg", etc.
+        return True
+
+    # Size field has a real value and it's not normalized - keep as-is
+    return False
