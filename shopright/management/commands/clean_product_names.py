@@ -178,89 +178,127 @@ class Command(BaseCommand):
 
         # Execute cleanup with transaction
         with transaction.atomic():
-            # Update the item
-            item.name = cleaned_name
-            item.size = cleaned_size
-            item.save(update_fields=['name', 'size'])
-            stats['cleaned'] = True
+            # IMPORTANT: Check for duplicates BEFORE saving to avoid IntegrityError
+            # If cleaned values would create a duplicate, merge into existing item instead
+            existing_duplicate = GroceryItem.objects.filter(
+                name=cleaned_name,
+                brand=item.brand,
+                size=cleaned_size,
+                store_name=item.store_name
+            ).exclude(id=item.id).first()
 
-            if verbose:
-                self.stdout.write(f"   ✅ Updated GroceryItem ID {item.id}")
+            if existing_duplicate:
+                # Duplicate already exists! Merge this item into it instead of updating
+                if verbose:
+                    self.stdout.write(f"   🔗 Found existing item (ID {existing_duplicate.id}), merging...")
 
-            # Update ShoppingListItems referencing this item
-            list_items = ShoppingListItem.objects.filter(grocery_item=item)
-            for list_item in list_items:
-                list_item.name = cleaned_name
-                list_item.size = cleaned_size
-                list_item.save(update_fields=['name', 'size'])
-                stats['list_items_updated'] += 1
+                # Merge purchase counts
+                existing_duplicate.times_purchased += item.times_purchased
 
-            if stats['list_items_updated'] > 0 and verbose:
-                self.stdout.write(f"   📊 Updated {stats['list_items_updated']} shopping list items")
+                # Copy over any missing data from the item being cleaned
+                if not existing_duplicate.image_url and item.image_url:
+                    existing_duplicate.image_url = item.image_url
+                if not existing_duplicate.barcode and item.barcode:
+                    existing_duplicate.barcode = item.barcode
+                    existing_duplicate.enriched_from_barcode = item.enriched_from_barcode
+                    existing_duplicate.first_enriched_by = item.first_enriched_by
+                    existing_duplicate.first_enriched_at = item.first_enriched_at
+                if not existing_duplicate.nutrition_data and item.nutrition_data:
+                    existing_duplicate.nutrition_data = item.nutrition_data
+                    existing_duplicate.nutriscore_grade = item.nutriscore_grade
+                    existing_duplicate.nova_group = item.nova_group
+                    existing_duplicate.last_nutrition_fetch = item.last_nutrition_fetch
 
-            # Check for duplicates after cleanup
-            stats['duplicates_merged'] = self._merge_duplicates_for_item(item, verbose)
+                existing_duplicate.save()
+
+                # Point all ShoppingListItems to the existing duplicate
+                # CAREFUL: Updating name/size might create duplicates in shopping lists
+                list_items = ShoppingListItem.objects.filter(grocery_item=item)
+                for list_item in list_items:
+                    # Check if this shopping list already has an item with cleaned name/brand/size
+                    existing_list_item = ShoppingListItem.objects.filter(
+                        shopping_list=list_item.shopping_list,
+                        name=cleaned_name,
+                        brand=list_item.brand,
+                        size=cleaned_size
+                    ).exclude(id=list_item.id).first()
+
+                    if existing_list_item:
+                        # Merge: add quantities and keep most recent purchase date
+                        existing_list_item.quantity += list_item.quantity
+                        existing_list_item.purchase_count += list_item.purchase_count
+                        if list_item.last_purchased_date:
+                            if not existing_list_item.last_purchased_date or list_item.last_purchased_date > existing_list_item.last_purchased_date:
+                                existing_list_item.last_purchased_date = list_item.last_purchased_date
+                        existing_list_item.save()
+                        # Delete the duplicate list item
+                        list_item.delete()
+                        if verbose:
+                            self.stdout.write(f"      🔗 Merged duplicate shopping list item")
+                    else:
+                        # Safe to update
+                        list_item.grocery_item = existing_duplicate
+                        list_item.name = cleaned_name
+                        list_item.size = cleaned_size
+                        list_item.save(update_fields=['grocery_item', 'name', 'size'])
+
+                    stats['list_items_updated'] += 1
+
+                # Delete the now-redundant item
+                item.delete()
+                stats['duplicates_merged'] = 1
+                stats['cleaned'] = True
+
+                if verbose:
+                    self.stdout.write(f"   ✅ Merged into existing item ID {existing_duplicate.id}")
+            else:
+                # No duplicate exists, safe to update in place
+                item.name = cleaned_name
+                item.size = cleaned_size
+                item.save(update_fields=['name', 'size'])
+                stats['cleaned'] = True
+
+                if verbose:
+                    self.stdout.write(f"   ✅ Updated GroceryItem ID {item.id}")
+
+                # Update ShoppingListItems referencing this item
+                # CAREFUL: Updating name/size might create duplicates in shopping lists
+                list_items = ShoppingListItem.objects.filter(grocery_item=item)
+                for list_item in list_items:
+                    # Check if this shopping list already has an item with cleaned name/brand/size
+                    existing_list_item = ShoppingListItem.objects.filter(
+                        shopping_list=list_item.shopping_list,
+                        name=cleaned_name,
+                        brand=list_item.brand,
+                        size=cleaned_size
+                    ).exclude(id=list_item.id).first()
+
+                    if existing_list_item:
+                        # Merge: add quantities and keep most recent purchase date
+                        existing_list_item.quantity += list_item.quantity
+                        existing_list_item.purchase_count += list_item.purchase_count
+                        if list_item.last_purchased_date:
+                            if not existing_list_item.last_purchased_date or list_item.last_purchased_date > existing_list_item.last_purchased_date:
+                                existing_list_item.last_purchased_date = list_item.last_purchased_date
+                        existing_list_item.save()
+                        # Delete the duplicate list item
+                        list_item.delete()
+                        if verbose:
+                            self.stdout.write(f"      🔗 Merged duplicate shopping list item")
+                    else:
+                        # Safe to update
+                        list_item.name = cleaned_name
+                        list_item.size = cleaned_size
+                        list_item.save(update_fields=['name', 'size'])
+
+                    stats['list_items_updated'] += 1
+
+                if stats['list_items_updated'] > 0 and verbose:
+                    self.stdout.write(f"   📊 Updated {stats['list_items_updated']} shopping list items")
 
         self.stdout.write(self.style.SUCCESS(f"   ✅ Cleaned: '{original_name}' → '{cleaned_name}'"))
 
         return stats
-
-    def _merge_duplicates_for_item(self, item, verbose=False):
-        """
-        After cleaning, check if this item now duplicates another GroceryItem.
-        If so, merge them (similar to merge_duplicate_grocery_items logic).
-
-        Returns: count of merged duplicates
-        """
-        # Find other items with same name+brand+size+store
-        duplicates = GroceryItem.objects.filter(
-            name=item.name,
-            brand=item.brand,
-            size=item.size,
-            store_name=item.store_name
-        ).exclude(id=item.id)
-
-        if not duplicates.exists():
-            return 0
-
-        merged_count = 0
-
-        for duplicate in duplicates:
-            # Merge purchase counts
-            item.times_purchased += duplicate.times_purchased
-
-            # Fill missing image_url
-            if not item.image_url and duplicate.image_url:
-                item.image_url = duplicate.image_url
-
-            # Fill missing barcode
-            if not item.barcode and duplicate.barcode:
-                item.barcode = duplicate.barcode
-                item.enriched_from_barcode = duplicate.enriched_from_barcode
-                item.first_enriched_by = duplicate.first_enriched_by
-                item.first_enriched_at = duplicate.first_enriched_at
-
-            # Fill missing nutrition
-            if not item.nutrition_data and duplicate.nutrition_data:
-                item.nutrition_data = duplicate.nutrition_data
-                item.nutriscore_grade = duplicate.nutriscore_grade
-                item.nova_group = duplicate.nova_group
-                item.last_nutrition_fetch = duplicate.last_nutrition_fetch
-
-            # Update ShoppingListItems to point to the kept item
-            ShoppingListItem.objects.filter(grocery_item=duplicate).update(grocery_item=item)
-
-            # Delete the duplicate
-            duplicate.delete()
-            merged_count += 1
-
-            if verbose:
-                self.stdout.write(f"   🔗 Merged duplicate GroceryItem ID {duplicate.id}")
-
-        # Save the merged item
-        item.save()
-
-        return merged_count
 
     def _display_statistics(self, stats, dry_run):
         """Display final statistics summary."""
