@@ -4306,31 +4306,25 @@ def _compare_single_item_price(reference_item, thirty_days_ago):
     # Find cheapest price
     cheapest = min(price_data, key=lambda x: x['price'])
 
-    # Get current item's price (from most recent receipt or GroceryItem record)
+    # Get current item's price from recent receipts
+    # NOTE: GroceryItem doesn't have a price field - prices are only in receipts
     current_price = None
-    if reference_item.price:
-        try:
-            current_price = float(reference_item.price.replace('$', '').replace(',', ''))
-        except (ValueError, AttributeError):
-            pass
 
-    # If no price in GroceryItem, try to find from recent receipts
-    if current_price is None:
-        recent_trip = ShoppingTrip.objects.filter(
-            store_name=reference_item.store_name,
-            trip_date__gte=thirty_days_ago
-        ).order_by('-trip_date').first()
+    recent_trip = ShoppingTrip.objects.filter(
+        store_name=reference_item.store_name,
+        trip_date__gte=thirty_days_ago
+    ).order_by('-trip_date').first()
 
-        if recent_trip:
-            for receipt_item in recent_trip.items:
-                if receipt_item.get('name', '').lower() == reference_item.name.lower():
-                    price_str = receipt_item.get('price', '')
-                    if price_str:
-                        try:
-                            current_price = float(price_str.replace('$', '').replace(',', ''))
-                            break
-                        except ValueError:
-                            continue
+    if recent_trip:
+        for receipt_item in recent_trip.items:
+            if receipt_item.get('name', '').lower() == reference_item.name.lower():
+                price_str = receipt_item.get('price', '')
+                if price_str:
+                    try:
+                        current_price = float(price_str.replace('$', '').replace(',', ''))
+                        break
+                    except ValueError:
+                        continue
 
     # Can't compare without current price
     if current_price is None:
