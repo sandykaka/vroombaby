@@ -64,16 +64,12 @@ def clean_product_name_and_size(name: str, size: str = "") -> Tuple[str, str]:
         # If the number is alone at the end, it's likely noise
         name = name[:match.start()].strip()
 
-    # If size is already meaningful (not just "ea", "each", "per lb", etc.), keep it
-    size_lower = size.lower() if size else ""
-    minimal_sizes = ("ea", "each", "eac", "1 ea", "1 each")
-
-    # Check if size is a normalized weighted item placeholder (e.g., "per lb", "per oz")
-    # These indicate the actual weight is embedded in the product name
-    is_per_unit = size_lower.startswith("per ")
-
-    if size and size_lower not in minimal_sizes and not is_per_unit:
-        return name, size
+    # Size field handling:
+    # Even if size field has a value, we should still clean the NAME if it contains size info
+    # Example: name="Raspberries 12 oz", size="12 oz" → should clean to name="Raspberries"
+    #
+    # We'll always attempt to extract/clean, but if size field has a meaningful value AND
+    # we don't find size in the name, we'll keep the size field value
 
     # Regex pattern for common size formats at END of name
     # Matches: 12 oz, 1 lb, 16ct, 1.5 l, 64 fl oz, 12 pack, etc.
@@ -97,6 +93,12 @@ def clean_product_name_and_size(name: str, size: str = "") -> Tuple[str, str]:
     # Match pricing/weighted unit patterns like "per lb", "per oz", "per kg"
     per_unit_pattern = re.compile(
         r'\s+per\s+(lb|oz|kg|g|gram|pound|ounce)\s*$',
+        re.IGNORECASE
+    )
+
+    # Match shrimp/seafood count sizes like "21-30", "31-40", "16-20"
+    count_range_pattern = re.compile(
+        r'\s+(\d{1,3}-\d{1,3})\s*$',
         re.IGNORECASE
     )
 
@@ -138,6 +140,14 @@ def clean_product_name_and_size(name: str, size: str = "") -> Tuple[str, str]:
         }
         normalized_unit = unit_map.get(unit.lower(), unit.lower())
         extracted_size = f"per {normalized_unit}"
+        return cleaned_name, extracted_size
+
+    # Try count range patterns (shrimp/seafood sizes)
+    match = count_range_pattern.search(name)
+    if match:
+        count_range = match.group(1).strip()
+        cleaned_name = name[:match.start()].strip()
+        extracted_size = f"{count_range} ct"  # "21-30" → "21-30 ct"
         return cleaned_name, extracted_size
 
     # No size found in name - return as-is
@@ -218,30 +228,25 @@ def should_extract_size(name: str, size: str) -> bool:
         re.IGNORECASE
     )
 
-    # First check if name contains size patterns
-    name_has_size = bool(size_pattern.search(name) or size_word_pattern.search(name) or per_unit_pattern.search(name))
+    count_range_pattern = re.compile(
+        r'\s+(\d{1,3}-\d{1,3})\s*$',
+        re.IGNORECASE
+    )
+
+    # Check if name contains ANY size patterns
+    name_has_size = bool(
+        size_pattern.search(name) or
+        size_word_pattern.search(name) or
+        per_unit_pattern.search(name) or
+        count_range_pattern.search(name)
+    )
 
     if not name_has_size:
         return False  # Name doesn't have size info, nothing to extract
 
-    # Name has size pattern - check if we should extract it
-    # Extract if:
-    # 1. Size field is empty/minimal ("ea", "each", etc.)
-    # 2. OR size field is a normalized weighted item ("per lb", "per oz", etc.)
-    #    because the actual weight is stuck in the name
-
-    if not size:
-        return True  # Size is empty, definitely extract from name
-
-    size_lower = size.lower().strip()
-
-    # Minimal/placeholder sizes - extract from name
-    if size_lower in ("ea", "each", "eac", "1 ea", "1 each"):
-        return True
-
-    # Normalized weighted item sizes - actual weight is in name, should extract
-    if size_lower.startswith("per "):  # "per lb", "per oz", "per kg", etc.
-        return True
-
-    # Size field has a real value and it's not normalized - keep as-is
-    return False
+    # Name has size pattern - we should ALWAYS extract it to clean the name
+    # Examples:
+    # - "Raspberries 12 oz" + size="12 oz" → Clean name to "Raspberries"
+    # - "Karela per lb" + size="" → Extract "per lb" to size field
+    # - "Blueberries 18 oz" + size="per oz" → Replace size with extracted "18 oz"
+    return True
