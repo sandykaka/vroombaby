@@ -55,8 +55,24 @@ def clean_product_name_and_size(name: str, size: str = "") -> Tuple[str, str]:
     name = name.strip()
     size = (size or "").strip()
 
-    # If size is already meaningful (not just "ea", "each", etc.), keep it
-    if size and size.lower() not in ("ea", "each", "eac", "1 ea", "1 each"):
+    # First, clean up trailing orphaned numbers (OCR artifacts like "Tomatoes 0", "Chicken 9")
+    # Only remove if it's JUST a number without units (not "9 oz" or "12 ct")
+    orphaned_number_pattern = re.compile(r'\s+\d+\s*$')
+    match = orphaned_number_pattern.search(name)
+    if match:
+        # Check if this looks like a size with units coming up
+        # If the number is alone at the end, it's likely noise
+        name = name[:match.start()].strip()
+
+    # If size is already meaningful (not just "ea", "each", "per lb", etc.), keep it
+    size_lower = size.lower() if size else ""
+    minimal_sizes = ("ea", "each", "eac", "1 ea", "1 each")
+
+    # Check if size is a normalized weighted item placeholder (e.g., "per lb", "per oz")
+    # These indicate the actual weight is embedded in the product name
+    is_per_unit = size_lower.startswith("per ")
+
+    if size and size_lower not in minimal_sizes and not is_per_unit:
         return name, size
 
     # Regex pattern for common size formats at END of name
@@ -72,9 +88,15 @@ def clean_product_name_and_size(name: str, size: str = "") -> Tuple[str, str]:
         re.IGNORECASE
     )
 
-    # Also match standalone size words like "gallon", "dozen"
+    # Also match standalone size words like "gallon", "dozen", "ea", "each"
     size_word_pattern = re.compile(
-        r'\s+(gallon|half\s*gallon|quart|pint|dozen|bundle|bunch|bag|box|container)\s*$',
+        r'\s+(gallon|half\s*gallon|quart|pint|dozen|bundle|bunch|bag|box|container|ea|each)\s*$',
+        re.IGNORECASE
+    )
+
+    # Match pricing/weighted unit patterns like "per lb", "per oz", "per kg"
+    per_unit_pattern = re.compile(
+        r'\s+per\s+(lb|oz|kg|g|gram|pound|ounce)\s*$',
         re.IGNORECASE
     )
 
@@ -97,8 +119,25 @@ def clean_product_name_and_size(name: str, size: str = "") -> Tuple[str, str]:
             extracted_size = "0.5 gallon"
         elif size_word.lower() == "dozen":
             extracted_size = "12 ct"
+        elif size_word.lower() in ("ea", "each"):
+            extracted_size = "1 ea"
         else:
             extracted_size = size_word
+        return cleaned_name, extracted_size
+
+    # Try "per unit" patterns (pricing indicators for weighted items)
+    match = per_unit_pattern.search(name)
+    if match:
+        unit = match.group(1).strip()
+        cleaned_name = name[:match.start()].strip()
+        # Normalize unit abbreviations
+        unit_map = {
+            'pound': 'lb',
+            'ounce': 'oz',
+            'gram': 'g'
+        }
+        normalized_unit = unit_map.get(unit.lower(), unit.lower())
+        extracted_size = f"per {normalized_unit}"
         return cleaned_name, extracted_size
 
     # No size found in name - return as-is
@@ -153,10 +192,15 @@ def should_extract_size(name: str, size: str) -> bool:
         size: Size field
 
     Returns:
-        True if name likely contains size info that should be extracted
+        True if name likely contains size info that should be extracted OR has trailing noise
     """
     if not name:
         return False
+
+    # Check for orphaned trailing numbers (OCR noise like "Tomatoes 0")
+    orphaned_number_pattern = re.compile(r'\s+\d+\s*$')
+    if orphaned_number_pattern.search(name):
+        return True  # Need cleanup to remove noise
 
     # Check if name contains size patterns
     size_pattern = re.compile(
@@ -165,12 +209,17 @@ def should_extract_size(name: str, size: str) -> bool:
     )
 
     size_word_pattern = re.compile(
-        r'\s+(gallon|half\s*gallon|quart|pint|dozen)\s*$',
+        r'\s+(gallon|half\s*gallon|quart|pint|dozen|ea|each)\s*$',
+        re.IGNORECASE
+    )
+
+    per_unit_pattern = re.compile(
+        r'\s+per\s+(lb|oz|kg|g|gram|pound|ounce)\s*$',
         re.IGNORECASE
     )
 
     # First check if name contains size patterns
-    name_has_size = bool(size_pattern.search(name) or size_word_pattern.search(name))
+    name_has_size = bool(size_pattern.search(name) or size_word_pattern.search(name) or per_unit_pattern.search(name))
 
     if not name_has_size:
         return False  # Name doesn't have size info, nothing to extract
