@@ -18,6 +18,7 @@ from .models import (
     ShoppingList, ShoppingListItem, AisleLocation, LocationVote
 )
 from .services.openfoodfacts_service import get_service as get_openfoodfacts_service
+from .utils.product_cleanup import clean_product_name_and_size
 
 logger = logging.getLogger(__name__)
 
@@ -638,11 +639,41 @@ You are analyzing a grocery store receipt. Extract the following information:
 
    IMPORTANT GUIDELINES:
    - BE THOROUGH: Scan the ENTIRE receipt carefully. Missing items is NOT acceptable.
-   - Keep name and size SEPARATE. Do NOT include size information in the name field.
    - If no quantity is shown, default quantity to 1.
    - Ignore other numbers (PLU codes, UPC codes, item numbers).
    - "Eac", "Each", "EA" means sold individually - do NOT include this in size.
    - Look for items throughout the ENTIRE receipt (top, middle, bottom).
+
+   CRITICAL - NAME AND SIZE SEPARATION:
+   ═════════════════════════════════════════════════
+   Keep name and size SEPARATE. Do NOT include size information in the name field.
+   The size field should contain ONLY the size/quantity, extracted separately from name.
+
+   ✅ CORRECT EXAMPLES:
+   Receipt shows: "Strawberries Org 1 lb"
+   → name="Strawberries Org", size="1 lb"
+
+   Receipt shows: "Raspberries 12 oz"
+   → name="Raspberries", size="12 oz"
+
+   Receipt shows: "Blackberries 6 oz"
+   → name="Blackberries", size="6 oz"
+
+   Receipt shows: "Milk Gallon"
+   → name="Milk", size="1 gallon"
+
+   Receipt shows: "Eggs Dozen"
+   → name="Eggs", size="12 ct"
+
+   ❌ WRONG - DO NOT DO THIS:
+   Receipt shows: "Raspberries 12 oz"
+   → name="Raspberries 12 oz", size="" ← WRONG! Size in name field!
+
+   Receipt shows: "Strawberries Org 1 lb"
+   → name="Strawberries Org 1 lb", size="" ← WRONG! Size in name field!
+
+   ALWAYS extract size information to the size field, NOT the name field.
+   ═════════════════════════════════════════════════
 
    CRITICAL - PRICE ACCURACY:
    - DOUBLE-CHECK every price carefully. Price accuracy is CRITICAL.
@@ -803,6 +834,18 @@ If you cannot determine a field, use empty string "" for text fields or 1 for qu
             except ValueError:
                 logger.warning(f"Could not parse total_amount: {total_str}")
 
+        # Clean up product names and sizes (extract size from name if needed)
+        for item in items:
+            if 'name' in item:
+                original_name = item['name']
+                original_size = item.get('size', '')
+                cleaned_name, cleaned_size = clean_product_name_and_size(original_name, original_size)
+
+                if cleaned_name != original_name or cleaned_size != original_size:
+                    logger.info(f"Cleaned product: '{original_name}' (size: '{original_size}') → '{cleaned_name}' (size: '{cleaned_size}')")
+                    item['name'] = cleaned_name
+                    item['size'] = cleaned_size
+
         return store_name, store_location, items, total_amount
 
     except Exception as e:
@@ -857,6 +900,9 @@ def _update_grocery_items(items_list, store_name):
         brand = item_data.get('brand', '').strip()
         size = item_data.get('size', '').strip()
         category = item_data.get('category', '').strip()
+
+        # Clean up name/size separation (safety net for direct calls)
+        name, size = clean_product_name_and_size(name, size)
 
         # Normalize size for weighted items (e.g., "0.69 lb" → "per lb")
         normalized_size = normalize_weighted_item_size(size)
@@ -981,6 +1027,9 @@ def _update_shopping_list_from_trip(family, user, store_name, store_location, it
         size = item_data.get('size', '').strip()
         price = item_data.get('price', '').strip()
         category = item_data.get('category', '').strip()
+
+        # Clean up name/size separation (safety net for direct calls)
+        name, size = clean_product_name_and_size(name, size)
 
         # Normalize size for weighted items when matching GroceryItem
         normalized_size = normalize_weighted_item_size(size)

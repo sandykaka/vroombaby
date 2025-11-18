@@ -377,7 +377,8 @@ class Command(BaseCommand):
             duplicates = [item for item in items if item.id != keeper.id]
 
             # Merge data
-            keeper.quantity = sum(item.quantity for item in items)
+            # Use max quantity (not sum) - duplicates were created by bug, not user intent
+            keeper.quantity = max(item.quantity for item in items)
 
             # Keep latest purchase date
             purchase_dates = [
