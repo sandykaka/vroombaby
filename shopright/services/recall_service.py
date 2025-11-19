@@ -521,12 +521,16 @@ class RecallService:
 
     # ==================== MAIN SYNC METHODS ====================
 
-    def sync_all_recalls(self, days_back: int = 1) -> Dict[str, int]:
+    def sync_all_recalls(self, days_back: int = 7) -> Dict[str, int]:
         """
         Fetch recalls from all sources and match against purchases
 
         Args:
-            days_back: Number of days to look back (default: 1 for daily sync)
+            days_back: Number of days to look back (default: 7 to account for API lag)
+
+        Note:
+            FDA API updates weekly (not real-time), so querying 7 days ensures we catch
+            all recalls even with API lag. The code de-dupes by recall_number automatically.
 
         Returns:
             Dict with counts: {'fda': 5, 'fsis': 3, 'cpsc': 2, 'matches': 8}
@@ -568,6 +572,9 @@ class RecallService:
         """
         Fetch only Class I (critical) recalls for urgent 5 PM check
 
+        Note:
+            Uses 7-day lookback to account for FDA API lag
+
         Returns:
             Dict with counts: {'critical_recalls': 3, 'matches': 5}
         """
@@ -575,13 +582,13 @@ class RecallService:
 
         logger.info(f"🚨 Urgent Class I recall check")
 
-        # Fetch last 24 hours of recalls
-        counts = self.sync_all_recalls(days_back=1)
+        # Fetch last 7 days of recalls (to account for API lag)
+        counts = self.sync_all_recalls(days_back=7)
 
         # Count Class I recalls
         critical_count = ProductRecall.objects.filter(
             classification='Class I',
-            recall_posted_date__gte=datetime.now().date() - timedelta(days=1)
+            recall_posted_date__gte=datetime.now().date() - timedelta(days=7)
         ).count()
 
         return {

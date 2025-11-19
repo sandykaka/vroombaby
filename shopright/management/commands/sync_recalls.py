@@ -7,15 +7,19 @@ This command:
 3. Creates RecallMatch records with confidence scores
 4. Notifies users for high-confidence matches (80%+ confidence)
 
+Note:
+    FDA API updates weekly (not real-time), so default lookback is 7 days
+    to ensure we catch all recalls despite API lag.
+
 Usage:
-    # Daily sync (run at 2 AM via cron)
+    # Daily sync (run at 2 AM via cron) - queries last 7 days
     python manage.py sync_recalls
 
     # Urgent check for Class I recalls (run at 5 PM via cron)
     python manage.py sync_recalls --urgent
 
     # Custom date range
-    python manage.py sync_recalls --days 7
+    python manage.py sync_recalls --days 14
 
     # Test mode (fetch but don't match)
     python manage.py sync_recalls --fetch-only
@@ -39,8 +43,8 @@ class Command(BaseCommand):
         parser.add_argument(
             '--days',
             type=int,
-            default=1,
-            help='Number of days to look back (default: 1)',
+            default=7,
+            help='Number of days to look back (default: 7 to account for FDA API lag)',
         )
         parser.add_argument(
             '--fetch-only',
