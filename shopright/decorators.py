@@ -36,8 +36,12 @@ def require_nutrition_scan_quota(view_func):
     """
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
+        # DEBUG: Confirm decorator is being called
+        logger.info("🔍 QUOTA DECORATOR CALLED - Starting quota check")
+
         # User should already be authenticated by @require_firebase_auth
         user = request.user
+        logger.info(f"🔍 User from request: {user}, authenticated: {user.is_authenticated}")
 
         if not user.is_authenticated:
             logger.error("❌ require_nutrition_scan_quota called without authenticated user")
