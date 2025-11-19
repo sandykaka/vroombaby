@@ -34,6 +34,10 @@ urlpatterns = [
     path('api/report-wrong-image/', views.report_wrong_image_api, name='report_wrong_image'),
     path('api/flagged-images/', views.flagged_images_api, name='flagged_images'),
 
+    # Subscription & Payments
+    path('api/verify-subscription/', views.verify_subscription_api, name='verify_subscription'),
+    path('api/subscription-status/', views.get_subscription_status_api, name='subscription_status'),
+
     # Aisle Location Tracking
     path('api/location/add/', views.add_location_api, name='add_location'),
     path('api/location/update/<int:location_id>/', views.update_location_api, name='update_location'),

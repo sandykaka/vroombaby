@@ -500,3 +500,80 @@ class RecallMatch(models.Model):
         self.resolved_at = timezone.now()
         self.save()
 
+
+class UserSubscription(models.Model):
+    """
+    User subscription and usage limits for freemium model
+
+    Free Tier: 5 nutrition scans per day
+    Premium Tier: Unlimited nutrition scans
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='subscription')
+
+    # Premium Status
+    is_premium = models.BooleanField(default=False)
+    premium_expires_at = models.DateTimeField(null=True, blank=True)
+    subscription_type = models.CharField(
+        max_length=50,
+        choices=[
+            ('free', 'Free'),
+            ('monthly', 'Monthly Premium'),
+            ('annual', 'Annual Premium'),
+            ('lifetime', 'Lifetime Premium'),
+        ],
+        default='free'
+    )
+
+    # Apple In-App Purchase Receipt (for verification)
+    apple_receipt_data = models.TextField(null=True, blank=True)
+    apple_transaction_id = models.CharField(max_length=200, blank=True, db_index=True)
+
+    # Daily Nutrition Scan Quota (free tier: 5/day, premium: unlimited)
+    daily_nutrition_scans_used = models.IntegerField(default=0)
+    last_nutrition_scan_reset = models.DateField(auto_now_add=True)
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "User Subscription"
+        verbose_name_plural = "User Subscriptions"
+
+    def __str__(self):
+        status = "Premium" if self.is_premium_active else "Free"
+        return f"{self.user.username} - {status} ({self.nutrition_scans_remaining} scans remaining)"
+
+    @property
+    def nutrition_scans_remaining(self):
+        """Calculate remaining nutrition scans for today"""
+        if self.is_premium_active:
+            return 999  # Unlimited for premium (display as ∞ in UI)
+
+        DAILY_FREE_LIMIT = 5
+        return max(0, DAILY_FREE_LIMIT - self.daily_nutrition_scans_used)
+
+    @property
+    def is_premium_active(self):
+        """Check if user has active premium subscription"""
+        # Lifetime premium never expires
+        if self.subscription_type == 'lifetime':
+            return True
+
+        # Check if premium subscription hasn't expired
+        if self.is_premium and self.premium_expires_at:
+            return self.premium_expires_at > timezone.now()
+
+        return False
+
+    def reset_daily_nutrition_scans(self):
+        """Reset nutrition scan counter for new day"""
+        self.daily_nutrition_scans_used = 0
+        self.last_nutrition_scan_reset = timezone.now().date()
+        self.save()
+
+    def increment_nutrition_scan(self):
+        """Increment nutrition scan counter"""
+        self.daily_nutrition_scans_used += 1
+        self.save()
+

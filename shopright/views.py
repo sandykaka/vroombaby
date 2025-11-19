@@ -19,6 +19,7 @@ from .models import (
 )
 from .services.openfoodfacts_service import get_service as get_openfoodfacts_service
 from .utils.product_cleanup import clean_product_name_and_size
+from .decorators import require_nutrition_scan_quota
 
 logger = logging.getLogger(__name__)
 
@@ -2028,6 +2029,7 @@ def lookup_barcode_in_openfoodfacts(upc):
 
 @csrf_exempt
 @require_firebase_auth
+@require_nutrition_scan_quota
 def scan_barcode_api(request):
     """
     Scan barcode for a shopping list item
@@ -2368,6 +2370,7 @@ def scan_barcode_api(request):
 
 @csrf_exempt
 @require_firebase_auth
+@require_nutrition_scan_quota
 def confirm_barcode_api(request):
     """
     Confirm and save barcode after user manually approves mismatch
@@ -2635,6 +2638,7 @@ def confirm_barcode_api(request):
 
 @csrf_exempt
 @require_firebase_auth
+@require_nutrition_scan_quota
 def lookup_barcode_api(request):
     """
     Standalone barcode lookup for nutrition info (no list_item_id required)
@@ -2748,6 +2752,122 @@ def lookup_barcode_api(request):
     response['Pragma'] = 'no-cache'
     response['Expires'] = '0'
     return response
+
+
+# ========================================
+# SUBSCRIPTION & PAYMENT ENDPOINTS
+# ========================================
+
+@csrf_exempt
+@require_firebase_auth
+def verify_subscription_api(request):
+    """
+    Verify Apple In-App Purchase receipt and update subscription status
+
+    POST /shopright/api/verify-subscription/
+    Body: {
+        "receipt_data": "base64_encoded_receipt_string",
+        "transaction_id": "1000000123456789"
+    }
+
+    Returns: {
+        "success": true,
+        "subscription": {
+            "is_premium": true,
+            "subscription_type": "monthly",
+            "scans_remaining": 999,
+            "premium_expires_at": "2024-12-25T10:00:00Z"
+        }
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    receipt_data = data.get('receipt_data', '').strip()
+    transaction_id = data.get('transaction_id', '').strip()
+
+    if not receipt_data or not transaction_id:
+        return JsonResponse({'error': 'Missing receipt_data or transaction_id'}, status=400)
+
+    user = request.user
+    logger.info(f"💳 Verifying subscription for user {user.username}")
+
+    # TODO: PRODUCTION - Verify receipt with Apple's verification servers
+    # https://developer.apple.com/documentation/appstorereceipts/verifyreceipt
+    # For now, we'll trust the iOS app and just save the receipt
+
+    # Get or create subscription
+    from shopright.services.subscription_service import SubscriptionService
+    subscription = SubscriptionService.get_or_create_subscription(user)
+
+    # Parse subscription type from receipt data (simplified)
+    # In production, this should parse the actual receipt response from Apple
+    subscription_type = data.get('subscription_type', 'monthly')  # monthly, annual, lifetime
+
+    # Update subscription
+    subscription.is_premium = True
+    subscription.subscription_type = subscription_type
+    subscription.apple_receipt_data = receipt_data
+    subscription.apple_transaction_id = transaction_id
+
+    # Set expiration based on type
+    from django.utils import timezone
+    from datetime import timedelta
+
+    if subscription_type == 'lifetime':
+        subscription.premium_expires_at = None  # Never expires
+    elif subscription_type == 'annual':
+        subscription.premium_expires_at = timezone.now() + timedelta(days=365)
+    else:  # monthly
+        subscription.premium_expires_at = timezone.now() + timedelta(days=30)
+
+    subscription.save()
+
+    logger.info(f"✅ Subscription verified for user {user.username}: {subscription_type}")
+
+    # Return updated subscription status
+    status = SubscriptionService.get_subscription_status(user)
+
+    return JsonResponse({
+        'success': True,
+        'subscription': status
+    })
+
+
+@csrf_exempt
+@require_firebase_auth
+def get_subscription_status_api(request):
+    """
+    Get current subscription status for user
+
+    GET /shopright/api/subscription-status/
+
+    Returns: {
+        "subscription": {
+            "is_premium": false,
+            "subscription_type": "free",
+            "scans_remaining": 5,
+            "scans_used_today": 0,
+            "premium_expires_at": null
+        }
+    }
+    """
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Only GET allowed'}, status=405)
+
+    user = request.user
+    from shopright.services.subscription_service import SubscriptionService
+
+    status = SubscriptionService.get_subscription_status(user)
+
+    return JsonResponse({
+        'subscription': status
+    })
 
 
 @csrf_exempt
