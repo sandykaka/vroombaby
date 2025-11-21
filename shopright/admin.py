@@ -259,26 +259,38 @@ class RecallMatchAdmin(admin.ModelAdmin):
 
 @admin.register(UserSubscription)
 class UserSubscriptionAdmin(admin.ModelAdmin):
-    list_display = ('user', 'is_premium', 'subscription_type', 'daily_nutrition_scan_count', 'daily_nutrition_scan_quota', 'subscription_end_date')
+    list_display = ('user', 'is_premium', 'subscription_type', 'daily_nutrition_scans_used', 'nutrition_scans_remaining', 'premium_expires_at')
     list_filter = ('is_premium', 'subscription_type')
     search_fields = ('user__username', 'user__first_name', 'user__last_name')
-    readonly_fields = ('created_at', 'updated_at', 'last_quota_reset_date')
+    readonly_fields = ('created_at', 'updated_at', 'nutrition_scans_remaining', 'is_premium_active')
 
     fieldsets = (
         ('User', {
             'fields': ('user',)
         }),
         ('Subscription Status', {
-            'fields': ('is_premium', 'subscription_type', 'subscription_start_date', 'subscription_end_date')
+            'fields': ('is_premium', 'subscription_type', 'premium_expires_at', 'is_premium_active')
         }),
         ('Daily Quota', {
-            'fields': ('daily_nutrition_scan_count', 'daily_nutrition_scan_quota', 'last_scan_date', 'last_quota_reset_date')
+            'fields': ('daily_nutrition_scans_used', 'last_nutrition_scan_reset', 'nutrition_scans_remaining')
         }),
-        ('Receipt Data', {
-            'fields': ('receipt_data', 'transaction_id')
+        ('Apple Receipt Data', {
+            'fields': ('apple_receipt_data', 'apple_transaction_id')
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at')
         }),
     )
+
+    def nutrition_scans_remaining(self, obj):
+        remaining = obj.nutrition_scans_remaining
+        if remaining == 999:
+            return '∞ (Unlimited)'
+        return remaining
+    nutrition_scans_remaining.short_description = 'Scans Remaining Today'
+
+    def is_premium_active(self, obj):
+        return obj.is_premium_active
+    is_premium_active.boolean = True
+    is_premium_active.short_description = 'Premium Active'
 
