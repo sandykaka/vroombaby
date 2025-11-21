@@ -2,7 +2,7 @@ from django.contrib import admin
 from .models import (
     Family, FamilyMember, ShoppingTrip, GroceryItem,
     ShoppingList, ShoppingListItem, AisleLocation,
-    ProductRecall, RecallMatch
+    ProductRecall, RecallMatch, UserSubscription
 )
 
 
@@ -255,4 +255,30 @@ class RecallMatchAdmin(admin.ModelAdmin):
         updated = queryset.update(resolved=True, resolved_at=timezone.now())
         self.message_user(request, f'Marked {updated} matches as resolved')
     mark_as_resolved.short_description = 'Mark as resolved'
+
+
+@admin.register(UserSubscription)
+class UserSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'is_premium', 'subscription_type', 'daily_nutrition_scan_count', 'daily_nutrition_scan_quota', 'subscription_end_date')
+    list_filter = ('is_premium', 'subscription_type')
+    search_fields = ('user__username', 'user__first_name', 'user__last_name')
+    readonly_fields = ('created_at', 'updated_at', 'last_quota_reset_date')
+
+    fieldsets = (
+        ('User', {
+            'fields': ('user',)
+        }),
+        ('Subscription Status', {
+            'fields': ('is_premium', 'subscription_type', 'subscription_start_date', 'subscription_end_date')
+        }),
+        ('Daily Quota', {
+            'fields': ('daily_nutrition_scan_count', 'daily_nutrition_scan_quota', 'last_scan_date', 'last_quota_reset_date')
+        }),
+        ('Receipt Data', {
+            'fields': ('receipt_data', 'transaction_id')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at')
+        }),
+    )
 
