@@ -262,7 +262,7 @@ class UserSubscriptionAdmin(admin.ModelAdmin):
     list_display = ('user', 'is_premium', 'subscription_type', 'daily_nutrition_scans_used', 'nutrition_scans_remaining', 'premium_expires_at')
     list_filter = ('is_premium', 'subscription_type')
     search_fields = ('user__username', 'user__first_name', 'user__last_name')
-    readonly_fields = ('created_at', 'updated_at', 'nutrition_scans_remaining', 'is_premium_active')
+    readonly_fields = ('created_at', 'updated_at', 'last_nutrition_scan_reset', 'nutrition_scans_remaining', 'is_premium_active')
 
     fieldsets = (
         ('User', {
