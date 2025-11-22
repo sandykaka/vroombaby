@@ -18,6 +18,7 @@ from .models import (
     ShoppingList, ShoppingListItem, AisleLocation, LocationVote
 )
 from .services.openfoodfacts_service import get_service as get_openfoodfacts_service
+from .services.subscription_service import SubscriptionService
 from .utils.product_cleanup import clean_product_name_and_size
 from .decorators import require_nutrition_scan_quota
 
@@ -1444,7 +1445,6 @@ def join_family_api(request):
     # Check family member limit based on owner's subscription
     family_owner = FamilyMember.objects.filter(family=family, role='owner').first()
     if family_owner:
-        from shopright.services.subscription_service import SubscriptionService
         owner_subscription = SubscriptionService.get_or_create_subscription(family_owner.user)
 
         if not owner_subscription.is_premium_active:
@@ -1514,7 +1514,6 @@ def family_info_api(request):
     # Get family owner's subscription status to determine member limit
     family_owner = members.filter(role='owner').first()
     if family_owner:
-        from shopright.services.subscription_service import SubscriptionService
         owner_subscription = SubscriptionService.get_or_create_subscription(family_owner.user)
         is_premium = owner_subscription.is_premium_active
         member_limit = None if is_premium else 2
