@@ -1,7 +1,7 @@
 import logging
 import json
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 from django.http import JsonResponse
@@ -9,6 +9,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.contrib.auth.models import User
 from django.db import models
+from django.utils import timezone
 from firebase_admin import auth as firebase_auth
 from openai import OpenAI
 from django.conf import settings
@@ -1175,7 +1176,6 @@ def shopping_history_api(request):
 
     # Apply 30-day limit for free users
     if not subscription.is_premium_active:
-        from datetime import timedelta
         thirty_days_ago = timezone.now().date() - timedelta(days=30)
         trips = trips.filter(trip_date__gte=thirty_days_ago)
         logger.info(f"Free user - filtering to receipts from last 30 days (since {thirty_days_ago})")
