@@ -1157,6 +1157,9 @@ def shopping_history_api(request):
 
     logger.info(f"History request from user: {request.user.username} (id={request.user.id})")
 
+    # Check subscription status for 30-day limit (free tier)
+    subscription = SubscriptionService.get_or_create_subscription(request.user)
+
     # Get user's family (if any)
     membership = FamilyMember.objects.filter(user=request.user).first()
 
@@ -1164,11 +1167,23 @@ def shopping_history_api(request):
         # User has family - show ALL trips from both user AND family
         trips = ShoppingTrip.objects.filter(
             models.Q(user=request.user) | models.Q(family=membership.family)
-        ).order_by('-trip_date')[:limit]
-        logger.info(f"Found {trips.count()} trips for user + family {membership.family.id}")
+        )
     else:
         # User has no family - show only personal trips
-        trips = ShoppingTrip.objects.filter(user=request.user).order_by('-trip_date')[:limit]
+        trips = ShoppingTrip.objects.filter(user=request.user)
+
+    # Apply 30-day limit for free users
+    if not subscription.is_premium_active:
+        from datetime import timedelta
+        thirty_days_ago = timezone.now().date() - timedelta(days=30)
+        trips = trips.filter(trip_date__gte=thirty_days_ago)
+        logger.info(f"Free user - filtering to receipts from last 30 days (since {thirty_days_ago})")
+
+    trips = trips.order_by('-trip_date')[:limit]
+
+    if membership:
+        logger.info(f"Found {trips.count()} trips for user + family {membership.family.id}")
+    else:
         logger.info(f"Found {trips.count()} personal trips for user (no family)")
 
     trips_data = [
@@ -1426,6 +1441,21 @@ def join_family_api(request):
     if FamilyMember.objects.filter(user=request.user, family=family).exists():
         return JsonResponse({'error': 'Already a member of this family'}, status=400)
 
+    # Check family member limit based on owner's subscription
+    family_owner = FamilyMember.objects.filter(family=family, role='owner').first()
+    if family_owner:
+        from shopright.services.subscription_service import SubscriptionService
+        owner_subscription = SubscriptionService.get_or_create_subscription(family_owner.user)
+
+        if not owner_subscription.is_premium_active:
+            if family.member_count >= 2:
+                logger.info(f"🚫 {request.user.username} tried to join '{family.name}' but family is at free tier limit (2 members)")
+                return JsonResponse({
+                    'error': 'FAMILY_LIMIT_REACHED',
+                    'message': 'Free families are limited to 2 members. The family owner needs to upgrade to Premium for unlimited members.',
+                    'current_members': family.member_count
+                }, status=403)
+
     # Add as member
     FamilyMember.objects.create(
         user=request.user,
@@ -1481,12 +1511,27 @@ def family_info_api(request):
     family = membership.family
     members = FamilyMember.objects.filter(family=family).select_related('user')
 
+    # Get family owner's subscription status to determine member limit
+    family_owner = members.filter(role='owner').first()
+    if family_owner:
+        from shopright.services.subscription_service import SubscriptionService
+        owner_subscription = SubscriptionService.get_or_create_subscription(family_owner.user)
+        is_premium = owner_subscription.is_premium_active
+        member_limit = None if is_premium else 2
+        can_add_members = family.can_add_member(is_premium)
+    else:
+        # Fallback if no owner found (shouldn't happen)
+        member_limit = 2
+        can_add_members = family.member_count < 2
+
     return JsonResponse({
         'family': {
             'id': family.id,
             'name': family.name,
             'invite_code': family.invite_code,
             'member_count': members.count(),
+            'member_limit': member_limit,
+            'can_add_members': can_add_members,
             'members': [
                 {
                     'username': m.user.username,

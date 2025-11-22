@@ -16,6 +16,18 @@ class Family(models.Model):
     def __str__(self):
         return f"{self.name} ({self.invite_code})"
 
+    @property
+    def member_count(self):
+        """Get current number of members in family"""
+        return self.members.count()
+
+    def can_add_member(self, is_owner_premium):
+        """Check if family can accept new member based on subscription status"""
+        FREE_TIER_LIMIT = 2  # Owner + 1 additional member
+        if is_owner_premium:
+            return True
+        return self.member_count < FREE_TIER_LIMIT
+
 
 class FamilyMember(models.Model):
     """Link users to families"""
