@@ -3820,6 +3820,19 @@ def recall_matches_api(request):
     """
     from shopright.models import RecallMatch
 
+    # Check if user is premium (PREMIUM ONLY FEATURE)
+    subscription = SubscriptionService.get_or_create_subscription(request.user)
+
+    if not subscription.is_premium_active:
+        logger.info(f"🚫 {request.user.username} tried to access recalls but is not premium")
+        return JsonResponse({
+            'premium_required': True,
+            'message': 'Recall alerts are a Premium feature. Upgrade to monitor your purchases for recalls.',
+            'matches': [],
+            'count': 0,
+            'critical_count': 0
+        }, status=403)
+
     # Get filter parameters
     status = request.GET.get('status', 'unverified')
     classification = request.GET.get('classification', None)
@@ -3917,6 +3930,16 @@ def recall_detail_api(request, recall_id):
     """
     from shopright.models import ProductRecall
 
+    # Check if user is premium (PREMIUM ONLY FEATURE)
+    subscription = SubscriptionService.get_or_create_subscription(request.user)
+
+    if not subscription.is_premium_active:
+        logger.info(f"🚫 {request.user.username} tried to view recall detail but is not premium")
+        return JsonResponse({
+            'error': 'PREMIUM_REQUIRED',
+            'message': 'Recall alerts are a Premium feature'
+        }, status=403)
+
     try:
         recall = ProductRecall.objects.get(id=recall_id)
     except ProductRecall.DoesNotExist:
@@ -3970,6 +3993,16 @@ def confirm_recall_match_api(request, match_id):
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
 
+    # Check if user is premium (PREMIUM ONLY FEATURE)
+    subscription = SubscriptionService.get_or_create_subscription(request.user)
+
+    if not subscription.is_premium_active:
+        logger.info(f"🚫 {request.user.username} tried to confirm recall but is not premium")
+        return JsonResponse({
+            'error': 'PREMIUM_REQUIRED',
+            'message': 'This feature requires Premium'
+        }, status=403)
+
     try:
         match = RecallMatch.objects.get(id=match_id, user=request.user)
     except RecallMatch.DoesNotExist:
@@ -4019,6 +4052,16 @@ def dismiss_recall_match_api(request, match_id):
 
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
+
+    # Check if user is premium (PREMIUM ONLY FEATURE)
+    subscription = SubscriptionService.get_or_create_subscription(request.user)
+
+    if not subscription.is_premium_active:
+        logger.info(f"🚫 {request.user.username} tried to dismiss recall but is not premium")
+        return JsonResponse({
+            'error': 'PREMIUM_REQUIRED',
+            'message': 'This feature requires Premium'
+        }, status=403)
 
     try:
         match = RecallMatch.objects.get(id=match_id, user=request.user)
