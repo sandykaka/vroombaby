@@ -4554,3 +4554,25 @@ def _compare_single_item_price(reference_item, thirty_days_ago):
         'match_method': match_method,
         'has_barcode': bool(reference_item.barcode)
     }
+
+
+# ========================================
+# LEGAL PAGES
+# ========================================
+
+def terms_of_service(request):
+    """
+    Display Terms of Service page.
+    Required by Apple App Store for subscription apps.
+    """
+    from django.shortcuts import render
+    return render(request, 'shopright/terms.html')
+
+
+def privacy_policy(request):
+    """
+    Display Privacy Policy page.
+    Required by Apple App Store for subscription apps.
+    """
+    from django.shortcuts import render
+    return render(request, 'shopright/privacy.html')
