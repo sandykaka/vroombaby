@@ -12,6 +12,7 @@ from django.db import models
 from django.utils import timezone
 from firebase_admin import auth as firebase_auth
 from openai import OpenAI
+from shopright.services.apple_receipt_service import verify_subscription_receipt
 from django.conf import settings
 
 from .models import (
@@ -2841,38 +2842,64 @@ def verify_subscription_api(request):
     user = request.user
     logger.info(f"💳 Verifying subscription for user {user.username}")
 
-    # TODO: PRODUCTION - Verify receipt with Apple's verification servers
-    # https://developer.apple.com/documentation/appstorereceipts/verifyreceipt
-    # For now, we'll trust the iOS app and just save the receipt
+    # PRODUCTION - Verify receipt with Apple's verification servers
+
+    is_valid, receipt_info = verify_subscription_receipt(
+        receipt_data=receipt_data,
+        bundle_id=settings.SHOPRIGHT_BUNDLE_ID,
+        shared_secret=settings.APPLE_SHARED_SECRET
+    )
+
+    if not is_valid:
+        logger.error(f"❌ Receipt verification failed for user {user.username}")
+        error_message = receipt_info.get('error', 'Invalid receipt')
+        return JsonResponse({
+            'error': f'Receipt verification failed: {error_message}'
+        }, status=400)
+
+    # Receipt is valid - extract subscription info from Apple's response
+    product_id = receipt_info.get('product_id', '')
+    transaction_id_from_receipt = receipt_info.get('transaction_id', transaction_id)
+    subscription_type = receipt_info.get('subscription_type', 'monthly')
+    expires_date = receipt_info.get('expires_date')
+    is_active = receipt_info.get('is_active', False)
+
+    if not is_active:
+        logger.warning(f"⚠️ Subscription expired for user {user.username}")
+        return JsonResponse({
+            'error': 'Subscription has expired'
+        }, status=400)
+
+    logger.info(f"✅ Receipt verified by Apple - Product: {product_id}, Active: {is_active}")
 
     # Get or create subscription
     from shopright.services.subscription_service import SubscriptionService
     subscription = SubscriptionService.get_or_create_subscription(user)
 
-    # Parse subscription type from receipt data (simplified)
-    # In production, this should parse the actual receipt response from Apple
-    subscription_type = data.get('subscription_type', 'monthly')  # monthly, annual, lifetime
-
-    # Update subscription
+    # Update subscription with verified data from Apple
     subscription.is_premium = True
     subscription.subscription_type = subscription_type
     subscription.apple_receipt_data = receipt_data
-    subscription.apple_transaction_id = transaction_id
+    subscription.apple_transaction_id = transaction_id_from_receipt
 
-    # Set expiration based on type
+    # Set expiration from Apple's response
     from django.utils import timezone
-    from datetime import timedelta
 
-    if subscription_type == 'lifetime':
-        subscription.premium_expires_at = None  # Never expires
-    elif subscription_type == 'annual':
-        subscription.premium_expires_at = timezone.now() + timedelta(days=365)
-    else:  # monthly
-        subscription.premium_expires_at = timezone.now() + timedelta(days=30)
+    if expires_date:
+        subscription.premium_expires_at = expires_date
+    else:
+        # Fallback to calculated expiration if Apple doesn't provide it
+        from datetime import timedelta
+        if subscription_type == 'lifetime':
+            subscription.premium_expires_at = None  # Never expires
+        elif subscription_type == 'annual':
+            subscription.premium_expires_at = timezone.now() + timedelta(days=365)
+        else:  # monthly
+            subscription.premium_expires_at = timezone.now() + timedelta(days=30)
 
     subscription.save()
 
-    logger.info(f"✅ Subscription verified for user {user.username}: {subscription_type}")
+    logger.info(f"✅ Subscription updated for user {user.username}: {subscription_type}, expires {subscription.premium_expires_at}")
 
     # Return updated subscription status
     status = SubscriptionService.get_subscription_status(user)
@@ -2881,6 +2908,7 @@ def verify_subscription_api(request):
         'success': True,
         'subscription': status
     })
+
 
 
 @csrf_exempt

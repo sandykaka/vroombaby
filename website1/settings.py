@@ -253,3 +253,15 @@ LOGGING = {
         'level': 'WARNING',
     },
 }
+
+# ========================================
+# APPLE IN-APP PURCHASE CONFIGURATION
+# ========================================
+
+# Apple shared secret for receipt verification
+# Get this from App Store Connect → Your App → Subscriptions → App-Specific Shared Secret
+# IMPORTANT: Add this to your .env file in production!
+APPLE_SHARED_SECRET = os.getenv('APPLE_SHARED_SECRET', '')
+
+# ShopRight Bundle ID (must match Xcode project)
+SHOPRIGHT_BUNDLE_ID = 'bleedblue.ShopRight'
