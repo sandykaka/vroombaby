@@ -132,8 +132,20 @@ class AppleReceiptVerifier:
             logger.warning("No subscription info found in receipt")
             return {'is_valid': False, 'error': 'No subscription info'}
 
-        # Get most recent transaction (sorted by purchase_date_ms)
-        latest_transaction = max(latest_receipt_info, key=lambda x: int(x.get('purchase_date_ms', 0)))
+        # DEBUG: Log all transactions in receipt
+        logger.info(f"📋 Found {len(latest_receipt_info)} transaction(s) in receipt:")
+        for idx, transaction in enumerate(latest_receipt_info):
+            product_id = transaction.get('product_id', 'unknown')
+            purchase_date_ms = int(transaction.get('purchase_date_ms', 0))
+            expires_date_ms = int(transaction.get('expires_date_ms', 0))
+            purchase_date = datetime.fromtimestamp(purchase_date_ms / 1000.0) if purchase_date_ms else None
+            expires_date = datetime.fromtimestamp(expires_date_ms / 1000.0) if expires_date_ms else None
+            is_active = expires_date and expires_date > datetime.now() if expires_date else False
+            logger.info(f"   [{idx+1}] {product_id} - Purchased: {purchase_date} - Expires: {expires_date} - Active: {is_active}")
+
+        # Get the subscription with the FURTHEST expiration date (not most recent purchase)
+        # This handles upgrade/downgrade scenarios correctly
+        latest_transaction = max(latest_receipt_info, key=lambda x: int(x.get('expires_date_ms', 0)))
 
         # Extract fields
         product_id = latest_transaction.get('product_id')
