@@ -9,7 +9,7 @@ Apple Docs: https://developer.apple.com/documentation/appstorereceipts/verifyrec
 
 import logging
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -134,13 +134,14 @@ class AppleReceiptVerifier:
 
         # DEBUG: Log all transactions in receipt
         logger.info(f"📋 Found {len(latest_receipt_info)} transaction(s) in receipt:")
+        now_utc = datetime.now(timezone.utc)
         for idx, transaction in enumerate(latest_receipt_info):
             product_id = transaction.get('product_id', 'unknown')
             purchase_date_ms = int(transaction.get('purchase_date_ms', 0))
             expires_date_ms = int(transaction.get('expires_date_ms', 0))
-            purchase_date = datetime.fromtimestamp(purchase_date_ms / 1000.0) if purchase_date_ms else None
-            expires_date = datetime.fromtimestamp(expires_date_ms / 1000.0) if expires_date_ms else None
-            is_active = expires_date and expires_date > datetime.now() if expires_date else False
+            purchase_date = datetime.fromtimestamp(purchase_date_ms / 1000.0, tz=timezone.utc) if purchase_date_ms else None
+            expires_date = datetime.fromtimestamp(expires_date_ms / 1000.0, tz=timezone.utc) if expires_date_ms else None
+            is_active = expires_date and expires_date > now_utc if expires_date else False
             logger.info(f"   [{idx+1}] {product_id} - Purchased: {purchase_date} - Expires: {expires_date} - Active: {is_active}")
 
         # Get the subscription with the FURTHEST expiration date (not most recent purchase)
@@ -154,12 +155,19 @@ class AppleReceiptVerifier:
         purchase_date_ms = int(latest_transaction.get('purchase_date_ms', 0))
         expires_date_ms = int(latest_transaction.get('expires_date_ms', 0))
 
-        # Convert milliseconds to datetime
-        purchase_date = datetime.fromtimestamp(purchase_date_ms / 1000.0) if purchase_date_ms else None
-        expires_date = datetime.fromtimestamp(expires_date_ms / 1000.0) if expires_date_ms else None
+        # Convert milliseconds to datetime (Apple timestamps are in UTC)
+        purchase_date = datetime.fromtimestamp(purchase_date_ms / 1000.0, tz=timezone.utc) if purchase_date_ms else None
+        expires_date = datetime.fromtimestamp(expires_date_ms / 1000.0, tz=timezone.utc) if expires_date_ms else None
 
-        # Check if subscription is currently active
-        is_active = expires_date and expires_date > datetime.now() if expires_date else False
+        # Check if subscription is currently active (compare UTC to UTC)
+        now_utc = datetime.now(timezone.utc)
+        is_active = expires_date and expires_date > now_utc if expires_date else False
+
+        # Log the comparison for debugging
+        if expires_date:
+            time_until_expiry = expires_date - now_utc
+            logger.info(f"⏰ Current time (UTC): {now_utc}")
+            logger.info(f"⏰ Time until expiry: {time_until_expiry}")
 
         # Determine subscription type from product ID
         subscription_type = 'monthly' if 'monthly' in product_id.lower() else 'annual'
