@@ -20,6 +20,7 @@ APPLE_PRODUCTION_URL = "https://buy.itunes.apple.com/verifyReceipt"
 
 # Status codes from Apple
 STATUS_VALID = 0
+STATUS_MALFORMED_RECEIPT = 21002
 STATUS_SANDBOX_RECEIPT_SENT_TO_PRODUCTION = 21007
 STATUS_PRODUCTION_RECEIPT_SENT_TO_SANDBOX = 21008
 
@@ -52,7 +53,9 @@ class AppleReceiptVerifier:
         is_valid, response = self._verify_with_apple(receipt_data, APPLE_PRODUCTION_URL)
 
         # If it's a sandbox receipt, retry with sandbox
-        if response and response.get('status') == STATUS_SANDBOX_RECEIPT_SENT_TO_PRODUCTION:
+        # Apple returns 21007 or sometimes 21002 for sandbox receipts sent to production
+        status = response.get('status') if response else None
+        if status in [STATUS_SANDBOX_RECEIPT_SENT_TO_PRODUCTION, STATUS_MALFORMED_RECEIPT]:
             logger.info("Receipt is from sandbox environment, retrying with sandbox URL")
             is_valid, response = self._verify_with_apple(receipt_data, APPLE_SANDBOX_URL)
 
