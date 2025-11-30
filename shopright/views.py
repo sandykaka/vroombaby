@@ -539,6 +539,58 @@ def save_receipt_api(request):
     return JsonResponse(response_data)
 
 
+def _merge_duplicate_items(items):
+    """
+    Merge duplicate items in receipt based on name, brand, size, and price.
+    Items with same name/brand/size/price are combined with quantity summed.
+
+    Args:
+        items: List of item dicts from OpenAI
+
+    Returns:
+        List of merged items with quantities
+    """
+    from collections import defaultdict
+
+    # Group items by (name, brand, size, price)
+    grouped = defaultdict(list)
+
+    for item in items:
+        # Create key from identifying fields (empty string if None)
+        key = (
+            item.get('name', '').strip().lower(),
+            item.get('brand', '').strip().lower(),
+            item.get('size', '').strip().lower(),
+            item.get('price', '').strip()
+        )
+        grouped[key].append(item)
+
+    # Merge duplicates
+    merged_items = []
+    for key, item_list in grouped.items():
+        if len(item_list) == 1:
+            # No duplicates - keep original item with quantity 1
+            item = item_list[0]
+            if 'quantity' not in item:
+                item['quantity'] = 1
+            merged_items.append(item)
+        else:
+            # Duplicates found - merge them
+            base_item = item_list[0].copy()
+
+            # Sum quantities (default to 1 per item if not specified)
+            total_quantity = sum(item.get('quantity', 1) for item in item_list)
+            base_item['quantity'] = total_quantity
+
+            # Keep unit price unchanged - let frontend calculate line totals
+            # (iOS already multiplies unit_price * quantity for display)
+
+            merged_items.append(base_item)
+            logger.info(f"Merged {len(item_list)} duplicates of '{base_item.get('name')}' into quantity {total_quantity}")
+
+    return merged_items
+
+
 def _parse_receipt_with_openai(receipt_image_b64):
     """
     Parse receipt image using OpenAI Vision API (gpt-4o)
@@ -849,6 +901,9 @@ If you cannot determine a field, use empty string "" for text fields or 1 for qu
                     logger.info(f"Cleaned product: '{original_name}' (size: '{original_size}') → '{cleaned_name}' (size: '{cleaned_size}')")
                     item['name'] = cleaned_name
                     item['size'] = cleaned_size
+
+        # Merge duplicate items (same name, brand, size, price)
+        items = _merge_duplicate_items(items)
 
         return store_name, store_location, items, total_amount
 
