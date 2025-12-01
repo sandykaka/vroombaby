@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 from django.http import JsonResponse
+from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.contrib.auth.models import User
@@ -4648,7 +4649,6 @@ def terms_of_service(request):
     Display Terms of Service page.
     Required by Apple App Store for subscription apps.
     """
-    from django.shortcuts import render
     return render(request, 'shopright/terms.html')
 
 
@@ -4657,5 +4657,12 @@ def privacy_policy(request):
     Display Privacy Policy page.
     Required by Apple App Store for subscription apps.
     """
-    from django.shortcuts import render
     return render(request, 'shopright/privacy.html')
+
+
+def support(request):
+    """
+    Display Support/Help page.
+    Required by Apple App Store - provides user support and FAQ.
+    """
+    return render(request, 'shopright/support.html')

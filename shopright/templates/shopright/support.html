@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GroceryGuard Support - Help & FAQ</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8f9fa;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+            padding: 40px 20px;
+            text-align: center;
+            margin-bottom: 40px;
+            border-radius: 8px;
+        }
+
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .section {
+            background: white;
+            padding: 30px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        h2 {
+            color: #4CAF50;
+            margin-bottom: 20px;
+            font-size: 1.8em;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 10px;
+        }
+
+        .faq-item {
+            margin-bottom: 25px;
+        }
+
+        .faq-question {
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 8px;
+            font-size: 1.1em;
+        }
+
+        .faq-answer {
+            color: #555;
+            padding-left: 20px;
+            line-height: 1.7;
+        }
+
+        .contact-box {
+            background: #f0f7f4;
+            border-left: 4px solid #4CAF50;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+
+        .contact-box h3 {
+            color: #4CAF50;
+            margin-bottom: 10px;
+        }
+
+        .contact-box a {
+            color: #4CAF50;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .contact-box a:hover {
+            text-decoration: underline;
+        }
+
+        .feature-list {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .feature-list li {
+            padding: 10px 0;
+            padding-left: 30px;
+            position: relative;
+        }
+
+        .feature-list li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #4CAF50;
+            font-weight: bold;
+            font-size: 1.3em;
+        }
+
+        footer {
+            text-align: center;
+            padding: 30px 20px;
+            color: #666;
+            margin-top: 40px;
+        }
+
+        footer a {
+            color: #4CAF50;
+            text-decoration: none;
+            margin: 0 15px;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        .btn {
+            display: inline-block;
+            background: #4CAF50;
+            color: white;
+            padding: 12px 30px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 10px;
+            transition: background 0.3s;
+        }
+
+        .btn:hover {
+            background: #45a049;
+        }
+
+        @media (max-width: 600px) {
+            header h1 {
+                font-size: 2em;
+            }
+
+            .section {
+                padding: 20px;
+            }
+
+            h2 {
+                font-size: 1.5em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🛡️ GroceryGuard Support</h1>
+            <p>Your Smart Grocery Shopping Assistant</p>
+        </header>
+
+        <!-- Getting Started -->
+        <div class="section">
+            <h2>Getting Started</h2>
+            <div class="faq-item">
+                <div class="faq-question">How do I scan my first receipt?</div>
+                <div class="faq-answer">
+                    1. Open GroceryGuard and tap the "Scan" tab<br>
+                    2. Position your camera over a grocery receipt<br>
+                    3. Tap the capture button or let it auto-capture<br>
+                    4. Wait a few seconds while AI extracts all items<br>
+                    5. Review and edit items if needed, then save
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">What types of receipts work?</div>
+                <div class="faq-answer">
+                    GroceryGuard works with receipts from any grocery store, supermarket, or food retailer. The AI is trained to recognize standard receipt formats including store name, items, prices, and dates.
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">How do I create a shopping list?</div>
+                <div class="faq-answer">
+                    Tap the "List" tab to see your shopping list. You can:<br>
+                    • Add items manually by tapping the + button<br>
+                    • Tap "Add from History" to see past purchases<br>
+                    • Select items you want to buy again<br>
+                    • Check off items as you shop
+                </div>
+            </div>
+        </div>
+
+        <!-- Features -->
+        <div class="section">
+            <h2>Features</h2>
+            <ul class="feature-list">
+                <li>AI-powered receipt scanning - extracts items automatically</li>
+                <li>Smart shopping lists - add items from purchase history</li>
+                <li>Complete purchase history - track all your grocery trips</li>
+                <li>Barcode scanner - get nutrition info and health scores</li>
+                <li>Family sharing - share lists with household members (Premium)</li>
+                <li>Cloud sync - access your data across all devices</li>
+                <li>Spending insights - see patterns in your grocery shopping</li>
+            </ul>
+        </div>
+
+        <!-- Troubleshooting -->
+        <div class="section">
+            <h2>Troubleshooting</h2>
+            <div class="faq-item">
+                <div class="faq-question">Receipt scan isn't working or items are missing</div>
+                <div class="faq-answer">
+                    • Ensure good lighting and the receipt is flat and clear<br>
+                    • Make sure the entire receipt is visible in the frame<br>
+                    • Avoid shadows or glare on the receipt<br>
+                    • After scanning, you can manually add any missed items using the Edit button<br>
+                    • Try taking a photo of the receipt instead of scanning it directly
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">I can't sign in with my phone number</div>
+                <div class="faq-answer">
+                    • Make sure you have a stable internet connection<br>
+                    • Verify the phone number is correct (include country code)<br>
+                    • Check that you can receive SMS messages<br>
+                    • If you don't receive the code within 60 seconds, tap "Resend"<br>
+                    • Try restarting the app if the issue persists
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">My purchase history isn't syncing</div>
+                <div class="faq-answer">
+                    • Pull down on the History tab to refresh<br>
+                    • Check your internet connection<br>
+                    • Make sure you're signed in to the same account on all devices<br>
+                    • Data syncs automatically when connected to Wi-Fi or cellular
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">Barcode scanner isn't finding nutrition info</div>
+                <div class="faq-answer">
+                    Not all products are in our nutrition database yet. We're constantly expanding coverage. If a product isn't found, you can still see the basic item information from your receipt.
+                </div>
+            </div>
+        </div>
+
+        <!-- Subscription & Billing -->
+        <div class="section">
+            <h2>Subscription & Billing</h2>
+            <div class="faq-item">
+                <div class="faq-question">What's included in GroceryGuard Premium?</div>
+                <div class="faq-answer">
+                    Premium unlocks:<br>
+                    • Unlimited family member sharing<br>
+                    • Full unlimited purchase history<br>
+                    • Priority customer support<br>
+                    • Ad-free experience<br>
+                    <br>
+                    Pricing: $4.99/month or $49.99/year (save 17%)
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">How do I cancel my subscription?</div>
+                <div class="faq-answer">
+                    1. Open iPhone Settings<br>
+                    2. Tap your name at the top<br>
+                    3. Tap "Subscriptions"<br>
+                    4. Select GroceryGuard<br>
+                    5. Tap "Cancel Subscription"<br>
+                    <br>
+                    You'll retain Premium access until the end of your billing period.
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">How do I restore my purchase on a new device?</div>
+                <div class="faq-answer">
+                    1. Sign in with the same Apple ID you used to purchase Premium<br>
+                    2. Open GroceryGuard<br>
+                    3. Go to Settings/Account<br>
+                    4. Tap "Restore Purchases"<br>
+                    <br>
+                    Your Premium status will be restored automatically.
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">I was charged but don't have Premium access</div>
+                <div class="faq-answer">
+                    Try tapping "Restore Purchases" in Settings. If that doesn't work, contact us with your purchase receipt and we'll resolve it immediately.
+                </div>
+            </div>
+        </div>
+
+        <!-- Privacy & Security -->
+        <div class="section">
+            <h2>Privacy & Security</h2>
+            <div class="faq-item">
+                <div class="faq-question">Is my data secure?</div>
+                <div class="faq-answer">
+                    Yes. GroceryGuard uses industry-standard encryption and secure Firebase authentication. Your data is stored securely in the cloud and only accessible by you. We never sell your personal information.
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">Can I delete my account and data?</div>
+                <div class="faq-answer">
+                    Yes. Go to Settings → Account → Delete Account. This will permanently remove all your data including receipts, shopping lists, and purchase history. This action cannot be undone.
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">Where can I read your privacy policy?</div>
+                <div class="faq-answer">
+                    Our full privacy policy is available at <a href="https://vroombaby.com/shopright/privacy" target="_blank">vroombaby.com/shopright/privacy</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Contact Support -->
+        <div class="section">
+            <h2>Need More Help?</h2>
+            <div class="contact-box">
+                <h3>Contact Support</h3>
+                <p>Can't find what you're looking for? We're here to help!</p>
+                <p><strong>Email:</strong> <a href="mailto:support@vroombaby.com">support@vroombaby.com</a></p>
+                <p><strong>Response Time:</strong> Within 24 hours (usually much faster)</p>
+                <p style="margin-top: 15px;">Please include:</p>
+                <ul style="margin-left: 20px; margin-top: 5px;">
+                    <li>Your iOS version</li>
+                    <li>App version (found in Settings)</li>
+                    <li>Detailed description of the issue</li>
+                    <li>Screenshots if applicable</li>
+                </ul>
+            </div>
+        </div>
+
+        <footer>
+            <p>
+                <a href="https://vroombaby.com/shopright/privacy">Privacy Policy</a>
+                <a href="https://vroombaby.com/shopright/terms">Terms of Service</a>
+            </p>
+            <p style="margin-top: 15px; color: #999;">© 2025 GroceryGuard. All rights reserved.</p>
+        </footer>
+    </div>
+</body>
+</html>

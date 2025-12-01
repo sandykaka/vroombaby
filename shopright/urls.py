@@ -63,5 +63,6 @@ urlpatterns = [
     # Legal Pages (required for App Store)
     path('terms/', views.terms_of_service, name='terms_of_service'),
     path('privacy/', views.privacy_policy, name='privacy_policy'),
+    path('support/', views.support, name='support'),
 ]
 
