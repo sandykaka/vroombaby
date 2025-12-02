@@ -48,7 +48,9 @@ class FamilyMember(models.Model):
 
 class ShoppingTrip(models.Model):
     """A single shopping trip with receipt"""
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='shopping_trips')
+    # SET_NULL allows family to keep trips when user deletes account
+    # When user is None, trip is orphaned but family can still access it
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, related_name='shopping_trips', null=True, blank=True)
     family = models.ForeignKey(Family, on_delete=models.CASCADE, related_name='shopping_trips', null=True, blank=True)
 
     # Store info
@@ -144,7 +146,8 @@ class GroceryItem(models.Model):
 class ShoppingList(models.Model):
     """Shopping list for a user or family (one per store location)"""
     family = models.ForeignKey(Family, on_delete=models.CASCADE, related_name='shopping_lists', null=True, blank=True)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='personal_shopping_lists', null=True, blank=True)
+    # SET_NULL allows family to keep lists when user deletes account
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, related_name='personal_shopping_lists', null=True, blank=True)
     store_name = models.CharField(max_length=200)  # Which store chain (e.g., "Trader Joe's")
     store_location = models.CharField(max_length=200, blank=True, default='')  # Specific address (e.g., "123 Main St, SF")
 

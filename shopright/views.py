@@ -4666,3 +4666,156 @@ def support(request):
     Required by Apple App Store - provides user support and FAQ.
     """
     return render(request, 'shopright/support.html')
+
+
+# ========================================
+# ACCOUNT MANAGEMENT
+# ========================================
+
+@csrf_exempt
+@require_firebase_auth
+def delete_account_api(request):
+    """
+    Delete user account and personal data
+
+    DELETE /shopright/api/account/delete/
+
+    Required by Apple App Store Guidelines 5.1.1(v)
+
+    DATA RETENTION POLICY:
+    - Personal trips (no family): DELETED
+    - Family-shared trips: KEPT for family (user anonymized)
+    - Personal lists (no family): DELETED
+    - Family-shared lists: KEPT for family (user anonymized)
+    - Subscriptions, recalls, votes: DELETED
+    - User account and phone number: DELETED
+
+    Returns: {
+        "success": true,
+        "message": "Account deleted successfully",
+        "stats": {
+            "personal_trips_deleted": 5,
+            "family_trips_kept": 3,
+            "personal_lists_deleted": 2,
+            "family_lists_kept": 1
+        }
+    }
+    """
+    if request.method != 'DELETE':
+        return JsonResponse({'error': 'Only DELETE allowed'}, status=405)
+
+    user = request.user
+    username = user.username
+
+    logger.info(f"🗑️ Account deletion requested for user: {username}")
+
+    try:
+        stats = {
+            'personal_trips_deleted': 0,
+            'family_trips_kept': 0,
+            'personal_lists_deleted': 0,
+            'family_lists_kept': 0,
+            'families_left': 0
+        }
+
+        # 1. Handle shopping trips (keep family trips, delete personal trips)
+        all_trips = ShoppingTrip.objects.filter(user=user)
+        for trip in all_trips:
+            if trip.family:
+                # Trip belongs to family - anonymize but keep it
+                trip.user = None  # Remove user reference
+                trip.save()
+                stats['family_trips_kept'] += 1
+                logger.debug(f"   Kept family trip: {trip.store_name} (anonymized)")
+            else:
+                # Personal trip - delete it
+                trip.items.all().delete()  # Delete associated items first
+                trip.delete()
+                stats['personal_trips_deleted'] += 1
+                logger.debug(f"   Deleted personal trip: {trip.store_name}")
+
+        # 2. Handle shopping lists (keep family lists, delete personal lists)
+        all_lists = ShoppingList.objects.filter(user=user)
+        for shopping_list in all_lists:
+            if shopping_list.family:
+                # List belongs to family - anonymize but keep it
+                shopping_list.user = None
+                shopping_list.created_by = None
+                shopping_list.save()
+                stats['family_lists_kept'] += 1
+                logger.debug(f"   Kept family list: {shopping_list.store_name} (anonymized)")
+            else:
+                # Personal list - delete it
+                shopping_list.list_items.all().delete()  # Delete items first
+                shopping_list.delete()
+                stats['personal_lists_deleted'] += 1
+                logger.debug(f"   Deleted personal list: {shopping_list.store_name}")
+
+        # 3. Leave all families
+        family_memberships = FamilyMember.objects.filter(user=user)
+        for membership in family_memberships:
+            family = membership.family
+            was_owner = membership.role == 'owner'
+            membership.delete()
+            stats['families_left'] += 1
+            logger.debug(f"   Left family: {family.name}")
+
+            # If family is now empty, delete it
+            if family.members.count() == 0:
+                family_name = family.name
+                family.delete()
+                logger.debug(f"   Deleted empty family: {family_name}")
+            # If user was owner, transfer ownership to another member
+            elif was_owner and family.members.count() > 0:
+                new_owner = family.members.first()
+                new_owner.role = 'owner'
+                new_owner.save()
+                logger.debug(f"   Transferred ownership to: {new_owner.user.username}")
+
+        # 4. Delete subscription data
+        try:
+            subscription = UserSubscription.objects.get(user=user)
+            subscription.delete()
+            logger.debug(f"   Deleted subscription data")
+        except UserSubscription.DoesNotExist:
+            pass
+
+        # 5. Delete recall matches
+        from shopright.models import RecallMatch
+        recall_matches = RecallMatch.objects.filter(user=user)
+        recall_count = recall_matches.count()
+        recall_matches.delete()
+        logger.debug(f"   Deleted {recall_count} recall matches")
+
+        # 6. Delete aisle location votes
+        location_votes = LocationVote.objects.filter(user=user)
+        vote_count = location_votes.count()
+        location_votes.delete()
+        logger.debug(f"   Deleted {vote_count} location votes")
+
+        # 7. Finally, delete the user account
+        user.delete()
+
+        logger.info(f"✅ Account deleted successfully: {username}")
+        logger.info(f"   - {stats['personal_trips_deleted']} personal trips deleted")
+        logger.info(f"   - {stats['family_trips_kept']} family trips kept (anonymized)")
+        logger.info(f"   - {stats['personal_lists_deleted']} personal lists deleted")
+        logger.info(f"   - {stats['family_lists_kept']} family lists kept (anonymized)")
+        logger.info(f"   - Left {stats['families_left']} families")
+        logger.info(f"   - {recall_count} recall matches deleted")
+        logger.info(f"   - {vote_count} location votes deleted")
+
+        return JsonResponse({
+            'success': True,
+            'message': 'Account and personal data deleted successfully',
+            'stats': stats
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error deleting account for {username}: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return JsonResponse({
+            'error': 'Failed to delete account',
+            'details': str(e)
+        }, status=500)

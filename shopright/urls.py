@@ -60,6 +60,9 @@ urlpatterns = [
     # Price Comparison (Barcode-First Matching)
     path('api/price-comparison/batch/', views.batch_price_comparison_api, name='batch_price_comparison'),
 
+    # Account Management
+    path('api/account/delete/', views.delete_account_api, name='delete_account'),
+
     # Legal Pages (required for App Store)
     path('terms/', views.terms_of_service, name='terms_of_service'),
     path('privacy/', views.privacy_policy, name='privacy_policy'),
