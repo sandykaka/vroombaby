@@ -20,6 +20,7 @@ urlpatterns = [
     path('api/family/leave/', views.leave_family_api, name='leave_family'),
     path('api/family/regenerate-code/', views.regenerate_invite_code_api, name='regenerate_invite_code'),
     path('api/family/remove-member/', views.remove_family_member_api, name='remove_family_member'),
+    path('api/family/transfer-ownership/', views.transfer_ownership_api, name='transfer_ownership'),
 
     # Shopping Lists
     path('api/shopping-lists/', views.shopping_lists_api, name='shopping_lists'),

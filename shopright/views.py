@@ -1928,6 +1928,74 @@ def remove_family_member_api(request):
     })
 
 
+@csrf_exempt
+@require_firebase_auth
+def transfer_ownership_api(request):
+    """
+    Transfer family ownership to another member (owner only)
+
+    POST /shopright/api/family/transfer-ownership/
+    Body: {
+        "new_owner_username": "+12345678901"
+    }
+
+    Returns: {
+        "success": true,
+        "message": "Ownership transferred successfully",
+        "new_owner": "+12345678901"
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    new_owner_username = data.get('new_owner_username')
+    if not new_owner_username:
+        return JsonResponse({'error': 'Missing new_owner_username'}, status=400)
+
+    # Get requester's family membership
+    requester_membership = FamilyMember.objects.filter(user=request.user).first()
+
+    if not requester_membership:
+        return JsonResponse({'error': 'You are not in a family'}, status=400)
+
+    # Only owner can transfer ownership
+    if requester_membership.role != 'owner':
+        return JsonResponse({'error': 'Only family owner can transfer ownership'}, status=403)
+
+    family = requester_membership.family
+
+    # Find the new owner
+    try:
+        new_owner_user = User.objects.get(username=new_owner_username)
+        new_owner_membership = FamilyMember.objects.get(user=new_owner_user, family=family)
+    except (User.DoesNotExist, FamilyMember.DoesNotExist):
+        return JsonResponse({'error': 'Member not found in this family'}, status=404)
+
+    # Can't transfer to yourself
+    if new_owner_user == request.user:
+        return JsonResponse({'error': 'You are already the owner'}, status=400)
+
+    # Transfer ownership: demote current owner to member, promote new owner to owner
+    requester_membership.role = 'member'
+    requester_membership.save()
+
+    new_owner_membership.role = 'owner'
+    new_owner_membership.save()
+
+    logger.info(f"👑 Ownership transferred in family '{family.name}': {request.user.username} → {new_owner_username}")
+
+    return JsonResponse({
+        'success': True,
+        'message': f'Ownership transferred to {new_owner_username}',
+        'new_owner': new_owner_username
+    })
+
+
 # ========================================
 # SHOPPING LISTS API
 # ========================================
