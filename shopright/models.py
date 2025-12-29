@@ -69,6 +69,13 @@ class ShoppingTrip(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Receipt metadata
+    created_by_shopper = models.BooleanField(default=False)  # True if shopper scanned for customer
+
+    # Delivery service linking
+    delivery = models.ForeignKey('WeeklyDelivery', on_delete=models.SET_NULL, null=True, blank=True, related_name='receipt')
+    shopper = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='shopped_receipts')
+
     class Meta:
         ordering = ['-trip_date']
 
@@ -157,6 +164,10 @@ class ShoppingList(models.Model):
 
     is_active = models.BooleanField(default=True)  # Can archive completed lists
 
+    # Delivery workflow locking fields
+    locked_for_shopping = models.BooleanField(default=False)  # True when shopper is shopping
+    locked_at = models.DateTimeField(null=True, blank=True)   # When list was locked
+
     class Meta:
         # Ensure one list per store LOCATION per family OR per user
         constraints = [
@@ -203,6 +214,10 @@ class ShoppingListItem(models.Model):
 
     quantity = models.IntegerField(default=1)
     is_checked = models.BooleanField(default=True)  # Default checked = want to buy
+
+    # Shopper tracking (separate from customer's is_checked)
+    shopper_collected = models.BooleanField(default=False)  # Shopper marks as packed
+    collected_at = models.DateTimeField(null=True, blank=True)  # When shopper collected it
 
     # Link to GLOBAL grocery item (for photos, barcodes, aisle locations)
     grocery_item = models.ForeignKey(
@@ -591,4 +606,397 @@ class UserSubscription(models.Model):
         """Increment nutrition scan counter"""
         self.daily_nutrition_scans_used += 1
         self.save()
+
+
+# =============================================================================
+# DELIVERY SERVICE MODELS - Phase 1 MVP
+# =============================================================================
+
+class UserProfile(models.Model):
+    """
+    Extended user profile for delivery service
+    Adds account_type to distinguish customer/shopper/store users
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+
+    account_type = models.CharField(
+        max_length=20,
+        choices=[
+            ('customer', 'Customer'),
+            ('shopper', 'Personal Shopper'),
+            ('store', 'Store Staff'),
+            ('store_owner', 'Store Owner'),
+            ('admin', 'Admin')
+        ],
+        default='customer'
+    )
+
+    # Stripe customer ID (for customers who use delivery service)
+    stripe_customer_id = models.CharField(max_length=255, blank=True, null=True)
+
+    # Default payment method for subscriptions
+    default_payment_method = models.CharField(max_length=255, blank=True, null=True)
+
+    # Push notification token (Firebase Cloud Messaging)
+    fcm_token = models.CharField(max_length=255, blank=True, null=True, db_index=True)
+
+    # For store users - links to their store
+    store = models.ForeignKey('Store', null=True, blank=True, on_delete=models.CASCADE, related_name='staff')
+
+    # Shopper approval (security - admin must approve shopper access)
+    is_approved_shopper = models.BooleanField(default=False, db_index=True)
+    shopper_approved_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='approved_shoppers'
+    )
+    shopper_approved_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.username} ({self.account_type})"
+
+
+class DeliveryZone(models.Model):
+    """Geographic zones for delivery routing"""
+    name = models.CharField(max_length=100)  # "Downtown SF", "Mission District"
+    zip_codes = models.JSONField(default=list)  # List of zip codes
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+
+class Store(models.Model):
+    """Partner stores (grocers, farmers markets, etc.)"""
+    name = models.CharField(max_length=200)
+    address = models.TextField()
+    contact_email = models.EmailField()
+    contact_phone = models.CharField(max_length=20)
+
+    # Business details
+    commission_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=10.0,
+        help_text="Percentage commission (e.g., 10.0 = 10%)"
+    )
+
+    # Fulfillment model - how this store operates
+    fulfillment_model = models.CharField(
+        max_length=30,
+        choices=[
+            ('store_packs_we_deliver', 'Store Packs, We Deliver'),
+            ('store_full_service', 'Store Packs and Delivers'),
+            ('we_shop_and_deliver', 'We Shop and Deliver'),
+        ],
+        default='store_packs_we_deliver',
+        help_text="Defines who handles shopping and delivery"
+    )
+
+    # Ownership and status
+    owner = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='owned_stores'
+    )
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        ordering = ['name']
+
+
+class Shopper(models.Model):
+    """Personal shopper/delivery driver profile"""
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='shopper_profile'
+    )
+
+    full_name = models.CharField(max_length=200)
+    phone = models.CharField(max_length=20)
+
+    # Background check status
+    background_check_date = models.DateField(null=True, blank=True)
+    background_check_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending'),
+            ('approved', 'Approved'),
+            ('rejected', 'Rejected')
+        ],
+        default='pending'
+    )
+
+    # Performance metrics
+    is_active = models.BooleanField(default=True)
+    rating = models.FloatField(default=5.0)
+    total_deliveries = models.IntegerField(default=0)
+
+    # Service area
+    delivery_zones = models.ManyToManyField(DeliveryZone, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.full_name} ({self.rating}⭐)"
+
+    class Meta:
+        ordering = ['-rating', '-total_deliveries']
+
+
+class DeliverySubscription(models.Model):
+    """Customer's weekly delivery subscription"""
+    customer = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='delivery_subscriptions'
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='subscriptions',
+        help_text="Optional - linked when store becomes a partner"
+    )
+
+    # Schedule
+    delivery_day = models.CharField(
+        max_length=20,
+        help_text="e.g., 'Saturday'"
+    )
+    delivery_window = models.CharField(
+        max_length=20,
+        help_text="e.g., '9-11am', '11am-1pm'"
+    )
+    delivery_address = models.TextField()
+    delivery_instructions = models.TextField(
+        blank=True,
+        help_text="Gate code, parking, special instructions"
+    )
+
+    # Shopping list for this store (shared with shopper/store for packing)
+    shopping_list = models.ForeignKey(
+        'ShoppingList',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='delivery_subscriptions',
+        help_text="Customer's shopping list - store/shopper toggle items directly"
+    )
+
+    # Status
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('active', 'Active'),
+            ('paused', 'Paused'),
+            ('cancelled', 'Cancelled')
+        ],
+        default='active'
+    )
+
+    # Subscription tier
+    subscription_tier = models.CharField(
+        max_length=20,
+        choices=[
+            ('basic', 'Basic - $15/week (1 store, delivery only)'),
+            ('premium', 'Premium - $30/week (2 stores, delivery + fridge stocking)')
+        ],
+        default='basic'
+    )
+
+    # Stripe billing data
+    stripe_customer_id = models.CharField(max_length=100, blank=True, help_text="Stripe customer ID for billing")
+    stripe_subscription_id = models.CharField(max_length=100, blank=True, help_text="Stripe subscription ID")
+
+    # Billing cycle tracking (for preventing gaming)
+    billing_cycle_start = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Start of current billing week (first delivery date)"
+    )
+    billing_cycle_end = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="End of current billing week (7 days after start)"
+    )
+    deliveries_this_cycle = models.IntegerField(
+        default=0,
+        help_text="Number of deliveries fulfilled in current billing cycle"
+    )
+
+    # Pending schedule changes (applied at next billing cycle)
+    pending_schedule = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Queued changes to apply at next billing cycle: {delivery_day, delivery_window, store_id, shopping_list_id}"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        store_name = self.store.name if self.store else "No Store"
+        return f"{self.customer.username} → {store_name} ({self.status})"
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['customer'],
+                condition=models.Q(status__in=['active', 'pending_confirmation']),
+                name='one_active_delivery_subscription_per_customer'
+            )
+        ]
+
+
+class WeeklyDelivery(models.Model):
+    """Represents one week's delivery order"""
+    subscription = models.ForeignKey(
+        DeliverySubscription,
+        on_delete=models.CASCADE,
+        related_name='weekly_deliveries'
+    )
+    delivery_date = models.DateField()
+
+    # Per-delivery time window (overrides subscription default if set)
+    delivery_window = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text="e.g., '9-11 AM' - if null, uses subscription's delivery_window"
+    )
+
+    # Shopping list for this week's delivery (can change over time)
+    shopping_list = models.ForeignKey(
+        ShoppingList,
+        on_delete=models.CASCADE,
+        related_name='weekly_deliveries',
+        help_text="Shopping list to use for this delivery"
+    )
+
+    # Assigned shopper (User with is_approved_shopper=True)
+    shopper = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='assigned_deliveries'
+    )
+
+    # Status workflow
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('scheduled', 'Scheduled'),
+            ('assigned', 'Assigned to Shopper'),
+            ('packing', 'Store is packing'),
+            ('ready', 'Ready for pickup'),
+            ('out_for_delivery', 'Shopper is delivering'),
+            ('delivered', 'Delivered'),
+            ('cancelled', 'Cancelled')
+        ],
+        default='scheduled'
+    )
+
+    # Packing tracking
+    packing_started_at = models.DateTimeField(null=True, blank=True)
+    packing_completed_at = models.DateTimeField(null=True, blank=True)
+    packed_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='packed_deliveries'
+    )
+
+    # Delivery tracking
+    picked_up_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+
+    # Financial
+    actual_cost = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Total grocery cost charged by store"
+    )
+    estimated_cost = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Estimated cost before shopping"
+    )
+    commission_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Commission we earn from store"
+    )
+
+    # Payment processing (Stripe)
+    payment_authorization_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Stripe PaymentIntent ID for pre-authorization hold"
+    )
+    payment_captured_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Final amount captured from receipt"
+    )
+    payment_charge_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Stripe Charge ID after payment capture"
+    )
+
+    # Receipt (uploaded by shopper - Phase 3)
+    receipt_image = models.ImageField(
+        upload_to='delivery_receipts/%Y/%m/',
+        null=True,
+        blank=True
+    )
+    shopping_trip = models.ForeignKey(
+        ShoppingTrip,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        help_text="Links to customer's shopping trip history"
+    )
+
+    # Customer feedback
+    customer_rating = models.IntegerField(null=True, blank=True)  # 1-5 stars
+    customer_feedback = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.subscription.customer.username} - {self.delivery_date} ({self.status})"
+
+    class Meta:
+        ordering = ['-delivery_date']
+        verbose_name_plural = "Weekly Deliveries"
 

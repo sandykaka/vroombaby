@@ -30,9 +30,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 SECRET_KEY = ')1x1+(1p0x*=8_0lfcn8^6!*#6ri-9zavxi14@nyug%!pa5k0m'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False  # Enable for development to serve media files
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '172.20.10.2', 'www.vroombaby.com', 'vroombaby.com', '44.214.122.27', '192.168.12.66',
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '172.20.10.2', 'www.vroombaby.com', 'vroombaby.com', '44.214.122.27', '192.168.12.66', '192.168.86.32',
                  'www.schoolconvo.com', 'schoolconvo.com', 'www.coffeewithexpert.com', 'coffeewithexpert.com']
 # ALLOWED_HOSTS = []
 
@@ -265,3 +265,15 @@ APPLE_SHARED_SECRET = os.getenv('APPLE_SHARED_SECRET', '')
 
 # ShopRight Bundle ID (must match Xcode project)
 SHOPRIGHT_BUNDLE_ID = 'bleedblue.ShopRight'
+
+# Stripe API Keys (for GroceryGuard delivery subscriptions)
+# Get these from Stripe Dashboard → Developers → API Keys
+# IMPORTANT: Add these to your .env file in production!
+STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')  # sk_test_... or sk_live_...
+STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY', '')  # pk_test_... or pk_live_...
+STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')  # whsec_...
+
+# Stripe Price IDs for delivery subscriptions
+# Create these in Stripe Dashboard → Products
+STRIPE_PRICE_BASIC = os.getenv('STRIPE_PRICE_BASIC', '')  # $15/week
+STRIPE_PRICE_PREMIUM = os.getenv('STRIPE_PRICE_PREMIUM', '')  # $30/week

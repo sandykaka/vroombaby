@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import views_delivery
 
 app_name = 'shopright'
 
@@ -61,11 +62,59 @@ urlpatterns = [
     path('api/price-comparison/batch/', views.batch_price_comparison_api, name='batch_price_comparison'),
 
     # Account Management
+    path('api/user-profile/', views.user_profile_api, name='user_profile'),
+    path('api/account/set-type/', views_delivery.set_account_type, name='set_account_type'),
     path('api/account/delete/', views.delete_account_api, name='delete_account'),
 
     # Legal Pages (required for App Store)
     path('terms/', views.terms_of_service, name='terms_of_service'),
     path('privacy/', views.privacy_policy, name='privacy_policy'),
     path('support/', views.support, name='support'),
+
+    # ========================================
+    # DELIVERY SERVICE APIs (Phase 1 MVP)
+    # ========================================
+
+    # Stripe Configuration (public endpoint)
+    path('api/delivery/stripe-config/', views_delivery.stripe_config, name='stripe_config'),
+    path('api/delivery/service-areas/', views_delivery.get_service_areas, name='get_service_areas'),
+    path('api/delivery/validate-address/', views_delivery.validate_address_endpoint, name='validate_address_endpoint'),
+
+    # Customer APIs
+    path('api/delivery/create-setup-intent/', views_delivery.create_setup_intent, name='create_setup_intent'),
+    path('api/delivery/attach-payment-method/', views_delivery.attach_payment_method, name='attach_payment_method'),
+    path('api/delivery/setup-subscription/', views_delivery.setup_subscription, name='setup_subscription'),
+    path('api/delivery/subscribe/', views_delivery.subscribe_delivery, name='subscribe_delivery'),
+    path('api/delivery/my-subscriptions/', views_delivery.my_subscriptions, name='my_subscriptions'),
+    path('api/delivery/billing-history/', views_delivery.billing_history, name='billing_history'),
+    path('api/delivery/delivery-history/', views_delivery.delivery_history, name='delivery_history'),
+    path('api/delivery/cancel/', views_delivery.cancel_subscription, name='cancel_subscription'),
+    path('api/delivery/remove-delivery/', views_delivery.remove_delivery, name='remove_delivery'),
+    path('api/delivery/cancel-subscription-completely/', views_delivery.cancel_subscription_completely, name='cancel_subscription_completely'),
+    path('api/delivery/modify/', views_delivery.modify_subscription, name='modify_subscription'),
+    path('api/delivery/upgrade-tier/', views_delivery.upgrade_subscription_tier, name='upgrade_subscription_tier'),
+    path('api/delivery/add-delivery/', views_delivery.add_delivery, name='add_delivery'),
+
+    # Push Notifications
+    path('api/update-fcm-token/', views_delivery.update_fcm_token, name='update_fcm_token'),
+
+    # Store APIs
+    path('api/store/deliveries/', views_delivery.store_deliveries, name='store_deliveries'),
+
+    # Shopper APIs
+    path('api/shopper/available-deliveries/', views.get_available_deliveries_api, name='get_available_deliveries'),
+    path('api/shopper/assign-delivery/', views.assign_delivery_api, name='assign_delivery'),
+    path('api/shopper/deny-delivery/', views.deny_delivery_api, name='deny_delivery'),
+    path('api/shopper/respond-to-delivery/', views_delivery.shopper_respond_to_delivery, name='shopper_respond_to_delivery'),
+    path('api/shopper/my-deliveries/', views.my_deliveries_api, name='my_deliveries'),
+    path('api/shopper/my-past-deliveries/', views.my_past_deliveries_api, name='my_past_deliveries'),
+    path('api/shopper/start-packing/', views.start_packing_api, name='start_packing'),
+    path('api/shopper/mark-ready/', views.mark_ready_api, name='mark_ready'),
+    path('api/shopper/start-delivery/', views.start_delivery_api, name='start_delivery'),
+    path('api/shopper/mark-delivered/', views.mark_delivered_api, name='mark_delivered'),
+    path('api/shopper/route/', views_delivery.shopper_route, name='shopper_route'),
+
+    # Stripe webhook (no auth required - verified by signature)
+    path('api/delivery/stripe-webhook/', views_delivery.stripe_webhook, name='stripe_webhook'),
 ]
 

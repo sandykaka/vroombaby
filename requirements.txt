@@ -5,6 +5,7 @@ firebase-admin
 googlemaps
 openai
 playwright
+stripe
 pandas
 ethnicolr
 #tensorflow-macos==2.12.0

@@ -18,12 +18,13 @@ from django.conf import settings
 
 from .models import (
     Family, FamilyMember, ShoppingTrip, GroceryItem,
-    ShoppingList, ShoppingListItem, AisleLocation, LocationVote
+    ShoppingList, ShoppingListItem, AisleLocation, LocationVote,
+    WeeklyDelivery, DeliverySubscription, UserProfile, Shopper
 )
 from .services.openfoodfacts_service import get_service as get_openfoodfacts_service
 from .services.subscription_service import SubscriptionService
 from .utils.product_cleanup import clean_product_name_and_size
-from .decorators import require_nutrition_scan_quota
+from .decorators import require_nutrition_scan_quota, require_approved_shopper
 
 logger = logging.getLogger(__name__)
 
@@ -301,11 +302,16 @@ def scan_receipt_api(request):
     )
 
     # Save image with trip ID in filename
-    trip.receipt_image.save(
-        f'receipt_{trip.id}.jpg',
-        ContentFile(image_data),
-        save=True
-    )
+    try:
+        trip.receipt_image.save(
+            f'receipt_{trip.id}.jpg',
+            ContentFile(image_data),
+            save=True
+        )
+        logger.info(f"✅ Receipt image saved: receipt_{trip.id}.jpg")
+    except Exception as e:
+        logger.error(f"❌ Failed to save receipt image for trip {trip.id}: {e}")
+        # Don't fail the entire request if image save fails
 
     # Update GroceryItem master list (for search/autocomplete)
     _update_grocery_items(parsed_items, store_name)
@@ -454,6 +460,9 @@ def save_receipt_api(request):
     store_name = data.get('store_name', '').strip()
     parsed_items = data.get('items', [])
 
+    # NEW: Check if this is a shopper uploading for a delivery
+    delivery_id = data.get('delivery_id')  # If present, shopper is uploading for customer
+
     if not receipt_image_b64:
         return JsonResponse({'error': 'Missing receipt_image'}, status=400)
     if not store_name:
@@ -483,31 +492,66 @@ def save_receipt_api(request):
         except ValueError:
             logger.warning(f"Could not parse total_amount: {total_str}")
 
-    # Get user's family
-    membership = FamilyMember.objects.filter(user=request.user).first()
-    family = membership.family if membership else None
+    # Handle shopper delivery upload vs. customer upload
+    if delivery_id:
+        # Shopper uploading receipt for customer's delivery
+        try:
+            from .models import WeeklyDelivery
+            delivery = WeeklyDelivery.objects.get(id=delivery_id, shopper=request.user)
+        except WeeklyDelivery.DoesNotExist:
+            return JsonResponse({'error': 'Delivery not found or not assigned to you'}, status=404)
+
+        # Get customer and their family (receipt will appear in customer's account)
+        customer = delivery.subscription.customer
+        customer_membership = FamilyMember.objects.filter(user=customer).first()
+        family = customer_membership.family if customer_membership else None
+
+        # Receipt will be owned by customer, not shopper
+        receipt_owner = customer
+        shopper = request.user  # Track who actually uploaded it
+        created_by_shopper = True
+
+        logger.info(f"Shopper {request.user.username} uploading receipt for delivery {delivery_id} (customer: {customer.username})")
+
+    else:
+        # Regular customer upload
+        membership = FamilyMember.objects.filter(user=request.user).first()
+        family = membership.family if membership else None
+
+        receipt_owner = request.user
+        shopper = None
+        created_by_shopper = False
 
     # Save receipt image
     from django.core.files.base import ContentFile
     image_data = base64.b64decode(receipt_image_b64)
 
-    # Create ShoppingTrip
+    # Create ShoppingTrip (owned by customer, created by shopper if delivery_id present)
     trip = ShoppingTrip.objects.create(
-        user=request.user,
+        user=receipt_owner,
         family=family,
         store_name=store_name,
         store_location=store_location,
         items=parsed_items,
         total_amount=total_amount,
-        trip_date=trip_date
+        trip_date=trip_date,
+        created_by_shopper=created_by_shopper,
+        shopper=shopper,
+        delivery=delivery if delivery_id else None  # Link to delivery if this is shopper receipt
     )
 
     # Save image with trip ID
-    trip.receipt_image.save(
-        f'receipt_{trip.id}.jpg',
-        ContentFile(image_data),
-        save=True
-    )
+    try:
+        trip.receipt_image.save(
+            f'receipt_{trip.id}.jpg',
+            ContentFile(image_data),
+            save=True
+        )
+        logger.info(f"✅ Receipt image saved: receipt_{trip.id}.jpg")
+    except Exception as e:
+        logger.error(f"❌ Failed to save receipt image for trip {trip.id}: {e}")
+        # Don't fail the entire request if image save fails
+        # The trip data is still valid, just without the image
 
     # Update GroceryItem master list
     _update_grocery_items(parsed_items, store_name)
@@ -517,8 +561,125 @@ def save_receipt_api(request):
         _update_shopping_list_from_trip(family, None, store_name, store_location, parsed_items, trip_date)
         logger.info(f"Updated shopping list for family: {family.name}")
     else:
-        _update_shopping_list_from_trip(None, request.user, store_name, store_location, parsed_items, trip_date)
-        logger.info(f"Updated personal shopping list for user: {request.user.username}")
+        _update_shopping_list_from_trip(None, receipt_owner, store_name, store_location, parsed_items, trip_date)
+        logger.info(f"Updated personal shopping list for user: {receipt_owner.username}")
+
+    # Handle delivery workflow if this was a shopper upload
+    if delivery_id:
+        # Link the trip to the delivery
+        delivery.shopping_trip = trip
+        delivery.actual_cost = total_amount  # Store actual grocery cost
+        # Receipt scan keeps status as "ready" - shopper will click "Start Delivery" separately
+        # delivery.status remains 'ready'
+        # Don't set delivered_at - that happens when shopper clicks "Mark Delivered"
+
+        # PAYMENT PROCESSING: Capture final amount from receipt
+        payment_adjustment_info = {}
+        if total_amount and delivery.payment_authorization_id:
+            from .services.stripe_service import StripeService
+
+            # Convert dollar amount to cents for Stripe
+            final_amount_cents = int(total_amount * 100)
+
+            # Capture the pre-authorized payment with final receipt amount
+            capture_result = StripeService.capture_authorized_payment(
+                authorization_id=delivery.payment_authorization_id,
+                final_amount=final_amount_cents,
+                delivery_id=delivery_id
+            )
+
+            if capture_result['success']:
+                delivery.payment_captured_amount = total_amount
+                delivery.payment_charge_id = capture_result.get('charge_id')
+                logger.info(f"✅ Payment captured: ${total_amount} for delivery {delivery_id}")
+
+                # Calculate adjustment vs estimated amount
+                if delivery.estimated_cost:
+                    from decimal import Decimal
+                    estimated_decimal = Decimal(str(delivery.estimated_cost))
+                    actual_decimal = Decimal(str(total_amount))
+                    adjustment = actual_decimal - estimated_decimal
+
+                    payment_adjustment_info = {
+                        'estimated_cost': float(delivery.estimated_cost),
+                        'actual_cost': total_amount,
+                        'adjustment': float(adjustment),
+                        'adjustment_type': 'refund' if adjustment < 0 else 'additional_charge' if adjustment > 0 else 'no_change'
+                    }
+                    logger.info(f"Payment adjustment for delivery {delivery_id}: estimated=${delivery.estimated_cost}, actual=${total_amount}, adjustment=${adjustment}")
+
+            else:
+                # Payment capture failed - log error but don't block delivery completion
+                error_msg = capture_result.get('error', 'Unknown payment error')
+                logger.error(f"❌ Payment capture failed for delivery {delivery_id}: {error_msg}")
+
+                # Store error for customer service follow-up
+                payment_adjustment_info = {
+                    'payment_error': error_msg,
+                    'requires_manual_processing': True
+                }
+
+        delivery.save()
+
+        # Unlock customer's shopping list
+        if delivery.shopping_list:
+            delivery.shopping_list.locked_for_shopping = False
+            delivery.shopping_list.locked_at = None
+            delivery.shopping_list.save()
+            logger.info(f"Unlocked shopping list {delivery.shopping_list.id} after delivery completion")
+
+        # Send notification to customer that receipt is uploaded and payment processed
+        from .services.notification_service import send_notification
+        try:
+            # Build notification message with payment info
+            notification_title = "Receipt Uploaded! 📋"
+
+            # Include the exact final amount charged
+            if total_amount and delivery.payment_captured_amount:
+                notification_message = f"Your {store_name} receipt has been uploaded and ${total_amount:.2f} charged to your payment method. Delivery will start soon!"
+            else:
+                notification_message = f"Your {store_name} receipt has been uploaded and payment processed. Delivery will start soon!"
+
+            # Add payment adjustment info to message if available
+            if payment_adjustment_info:
+                adjustment_type = payment_adjustment_info.get('adjustment_type')
+                if adjustment_type == 'refund':
+                    adjustment_amount = abs(payment_adjustment_info.get('adjustment', 0))
+                    notification_message += f"\n\nGood news! We're refunding ${adjustment_amount:.2f} to your payment method."
+                elif adjustment_type == 'additional_charge':
+                    adjustment_amount = payment_adjustment_info.get('adjustment', 0)
+                    notification_message += f"\n\nThe final amount was ${adjustment_amount:.2f} more than estimated. Payment adjusted automatically."
+                elif payment_adjustment_info.get('payment_error'):
+                    notification_message += "\n\nPayment processing in progress. You'll receive a receipt shortly."
+
+            # Build extra_data with payment info
+            extra_data = {
+                "delivery_id": delivery_id,
+                "trip_id": trip.id,
+                "store_name": store_name,
+                "total_amount": str(total_amount) if total_amount else None
+            }
+
+            # Add payment adjustment details
+            if payment_adjustment_info:
+                extra_data.update({
+                    "payment_adjustment": payment_adjustment_info,
+                    "estimated_cost": str(payment_adjustment_info.get('estimated_cost', '')) if payment_adjustment_info.get('estimated_cost') else None,
+                    "actual_cost": str(payment_adjustment_info.get('actual_cost', '')) if payment_adjustment_info.get('actual_cost') else None,
+                    "adjustment_amount": str(payment_adjustment_info.get('adjustment', '')) if payment_adjustment_info.get('adjustment') else None
+                })
+
+            send_notification(
+                user=customer,
+                title=notification_title,
+                body=notification_message,
+                notification_type="receipt_uploaded",
+                data=extra_data
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send delivery completion notification: {e}")
+
+        logger.info(f"✅ Receipt scanned for delivery {delivery_id} by shopper {request.user.username}, payment processed, receipt saved as trip {trip.id} for customer {customer.username}")
 
     # Build response
     receipt_image_url = request.build_absolute_uri(trip.receipt_image.url) if trip.receipt_image else None
@@ -531,9 +692,15 @@ def save_receipt_api(request):
         'items': parsed_items,
         'total_amount': str(trip.total_amount) if trip.total_amount else None,
         'item_count': len(parsed_items),
-        'shopped_by': request.user.username,
+        'shopped_by': receipt_owner.username,  # Customer's name (receipt owner)
         'receipt_image_url': receipt_image_url
     }
+
+    # Add delivery info for shopper uploads
+    if delivery_id:
+        response_data['delivery_id'] = delivery_id
+        response_data['uploaded_by_shopper'] = request.user.username
+        response_data['message'] = "Receipt uploaded and payment processed successfully"
 
     logger.info(f"Receipt saved: trip_id={trip.id}, store={trip.store_name}, items={len(parsed_items)}")
 
@@ -1232,7 +1399,7 @@ def shopping_history_api(request):
         trips = ShoppingTrip.objects.filter(user=request.user)
 
     # Apply 30-day limit for free users
-    if not subscription.is_premium_active:
+    if not SubscriptionService.is_premium_user(request.user):
         thirty_days_ago = timezone.now().date() - timedelta(days=30)
         trips = trips.filter(trip_date__gte=thirty_days_ago)
         logger.info(f"Free user - filtering to receipts from last 30 days (since {thirty_days_ago})")
@@ -1502,9 +1669,9 @@ def join_family_api(request):
     # Check family member limit based on owner's subscription
     family_owner = FamilyMember.objects.filter(family=family, role='owner').first()
     if family_owner:
-        owner_subscription = SubscriptionService.get_or_create_subscription(family_owner.user)
+        is_premium = SubscriptionService.is_premium_user(family_owner.user)
 
-        if not owner_subscription.is_premium_active:
+        if not is_premium:
             if family.member_count >= 2:
                 logger.info(f"🚫 {request.user.username} tried to join '{family.name}' but family is at free tier limit (2 members)")
                 return JsonResponse({
@@ -1571,8 +1738,7 @@ def family_info_api(request):
     # Get family owner's subscription status to determine member limit
     family_owner = members.filter(role='owner').first()
     if family_owner:
-        owner_subscription = SubscriptionService.get_or_create_subscription(family_owner.user)
-        is_premium = owner_subscription.is_premium_active
+        is_premium = SubscriptionService.is_premium_user(family_owner.user)
         member_limit = None if is_premium else 2
         can_add_members = family.can_add_member(is_premium)
     else:
@@ -1858,24 +2024,101 @@ def shopping_list_detail_api(request, list_id):
     except ShoppingList.DoesNotExist:
         return JsonResponse({'error': 'List not found'}, status=404)
 
-    # Verify user has access (same family OR personal list owned by user)
+    # Verify user has access (same family OR personal list owned by user OR shopper assigned to deliver)
     membership = FamilyMember.objects.filter(user=request.user).first()
 
     # Allow access if:
     # 1. It's a personal list (no family) owned by this user, OR
-    # 2. It's a family list and user is in that family
+    # 2. It's a family list and user is in that family, OR
+    # 3. It's a shopper who has an active delivery assignment for this list
     is_personal_list = lst.family is None and lst.user == request.user
     is_family_list = membership and lst.family == membership.family
 
-    if not (is_personal_list or is_family_list):
+    # Check if user is a shopper with active delivery assignment
+    is_assigned_shopper = False
+    try:
+        # Check if user is approved shopper (same as @require_approved_shopper decorator)
+        if hasattr(request.user, 'profile') and request.user.profile.is_approved_shopper:
+            logger.info(f"🛒 Found approved shopper: {request.user.username}")
+
+            # Check if shopper has active delivery for this shopping list
+            # Use WeeklyDelivery.shopping_list directly (not subscription.shopping_list)
+            active_deliveries = WeeklyDelivery.objects.filter(
+                shopper=request.user,
+                shopping_list=lst,  # Direct FK on WeeklyDelivery
+                status__in=['assigned', 'packing', 'ready', 'out_for_delivery']
+            )
+
+            logger.info(f"🛒 Active deliveries for list {lst.id}: {active_deliveries.count()}")
+            for delivery in active_deliveries:
+                logger.info(f"   - Delivery {delivery.id}, status: {delivery.status}")
+
+            is_assigned_shopper = active_deliveries.exists()
+        else:
+            logger.info(f"🛒 User {request.user.username} is not an approved shopper")
+    except Exception as e:
+        logger.error(f"🛒 Error checking shopper status: {e}")
+
+    logger.info(f"🔐 Access check for list {lst.id}: personal={is_personal_list}, family={is_family_list}, shopper={is_assigned_shopper}")
+
+    if not (is_personal_list or is_family_list or is_assigned_shopper):
         return JsonResponse({'error': 'Access denied'}, status=403)
+
+    # Block customer edit access when shopper is actively working (packing or delivering)
+    if request.method in ['PUT', 'POST'] and (is_personal_list or is_family_list):
+        # Check if any shopper is currently working on this list
+        # Use WeeklyDelivery.shopping_list directly (not subscription.shopping_list)
+        active_shopper_deliveries = WeeklyDelivery.objects.filter(
+            shopping_list=lst,  # Direct FK on WeeklyDelivery
+            status__in=['packing', 'ready', 'out_for_delivery']
+        ).select_related('shopper')
+
+        if active_shopper_deliveries.exists():
+            # Get shopper info for informative error message
+            delivery = active_shopper_deliveries.first()
+            shopper_name = delivery.shopper.get_full_name() if delivery.shopper else "A shopper"
+
+            # Include delivery date in message for clarity
+            delivery_date_str = delivery.delivery_date.strftime('%B %d') if delivery.delivery_date else ""
+            date_suffix = f" for your {delivery_date_str} delivery" if delivery_date_str else ""
+
+            status_messages = {
+                'packing': f'Shopper is currently shopping{date_suffix}.',
+                'ready': f'Shopper has finished shopping{date_suffix}. Your order is ready for delivery.',
+                'out_for_delivery': f'Shopper is currently delivering your {delivery_date_str} order.' if delivery_date_str else 'Shopper is currently delivering your order.'
+            }
+
+            logger.info(f"🚫 Blocked customer {request.user.username} from editing list {lst.id}: delivery status is {delivery.status} for {delivery.delivery_date}")
+
+            return JsonResponse({
+                'error': 'order_in_progress',
+                'message': status_messages.get(delivery.status, 'Your order is currently being processed by a shopper.'),
+                'delivery_status': delivery.status,
+                'delivery_date': delivery.delivery_date.isoformat() if delivery.delivery_date else None,
+                'read_only': True
+            }, status=423)  # HTTP 423 Locked
 
     if request.method == 'GET':
         items = lst.list_items.all()
 
+        # For shoppers: Only show items customer marked as "need to buy" (is_checked=False)
+        # Shoppers shouldn't see items customer already has
+        if is_assigned_shopper:
+            items = items.filter(is_checked=False)
+            logger.info(f"🛒 Shopper view: Filtered to {items.count()} items customer needs (is_checked=False)")
+
         # Enrich items with image URLs using fuzzy matching (like trip detail API)
         enriched_items = []
         for item in items:
+            # For shopper view: use shopper_collected as is_checked
+            # For customer view: use is_checked as is_checked
+            if is_assigned_shopper:
+                # Shopper sees their own collection state
+                checked_state = item.shopper_collected
+            else:
+                # Customer sees their own checked state
+                checked_state = item.is_checked
+
             item_dict = {
                 'id': item.id,
                 'name': item.name,
@@ -1884,7 +2127,7 @@ def shopping_list_detail_api(request, list_id):
                 'price': item.price,
                 'category': item.category,
                 'quantity': item.quantity,
-                'is_checked': item.is_checked,
+                'is_checked': checked_state,
                 'last_purchased_date': item.last_purchased_date.isoformat() if item.last_purchased_date else None,
                 'purchase_count': item.purchase_count
             }
@@ -1914,14 +2157,66 @@ def shopping_list_detail_api(request, list_id):
             item_dict['nutrition'] = nutrition_data
             enriched_items.append(item_dict)
 
+        # Check if list is read-only for customer (shopper actively working)
+        read_only_info = None
+        if is_personal_list or is_family_list:
+            # Use WeeklyDelivery.shopping_list directly (not subscription.shopping_list)
+            active_shopper_deliveries = WeeklyDelivery.objects.filter(
+                shopping_list=lst,  # Direct FK on WeeklyDelivery
+                status__in=['packing', 'ready', 'out_for_delivery']
+            ).select_related('shopper')
+
+            # DEBUG: Log ALL deliveries for this list to help diagnose issues
+            all_deliveries_for_list = WeeklyDelivery.objects.filter(shopping_list=lst)
+            logger.info(f"📋 List {lst.id} ({lst.store_name}) has {all_deliveries_for_list.count()} total deliveries:")
+            for d in all_deliveries_for_list:
+                logger.info(f"   - Delivery {d.id}: status={d.status}, date={d.delivery_date}, shopping_list_id={d.shopping_list_id}")
+
+            if active_shopper_deliveries.exists():
+                delivery = active_shopper_deliveries.first()
+                shopper_name = delivery.shopper.get_full_name() if delivery.shopper else "A shopper"
+
+                # Include delivery date in message for clarity (especially for Premium with multiple deliveries)
+                delivery_date_str = delivery.delivery_date.strftime('%B %d') if delivery.delivery_date else ""
+                date_suffix = f" for your {delivery_date_str} delivery" if delivery_date_str else ""
+
+                status_messages = {
+                    'packing': f'Shopper is currently shopping{date_suffix}.',
+                    'ready': f'Shopper has finished shopping{date_suffix}. Your order is ready for delivery.',
+                    'out_for_delivery': f'Shopper is currently delivering your {delivery_date_str} order.' if delivery_date_str else 'Shopper is currently delivering your order.'
+                }
+
+                read_only_info = {
+                    'is_read_only': True,
+                    'message': status_messages.get(delivery.status, 'Your order is currently being processed by a shopper.'),
+                    'delivery_status': delivery.status,
+                    'shopper_name': shopper_name,
+                    'delivery_date': delivery.delivery_date.isoformat() if delivery.delivery_date else None,
+                    'delivery_id': delivery.id  # Include delivery ID for debugging
+                }
+                logger.info(f"📖 LOCKED: List {lst.id} is read-only due to delivery {delivery.id} (status={delivery.status}, date={delivery.delivery_date})")
+            else:
+                logger.info(f"📖 UNLOCKED: List {lst.id} has no active deliveries in packing/ready/out_for_delivery status")
+
+        # Calculate counts based on filtered items for shoppers
+        if is_assigned_shopper:
+            # For shoppers: count based on filtered items (only items customer needs)
+            item_count = len(enriched_items)
+            checked_count = sum(1 for item in enriched_items if item['is_checked'])
+        else:
+            # For customers: use overall list counts
+            item_count = lst.total_count
+            checked_count = lst.checked_count
+
         return JsonResponse({
             'list': {
                 'id': lst.id,
                 'store_name': lst.store_name,
                 'store_location': lst.store_location or '',
-                'item_count': lst.total_count,
-                'checked_count': lst.checked_count,
-                'items': enriched_items
+                'item_count': item_count,
+                'checked_count': checked_count,
+                'items': enriched_items,
+                'read_only': read_only_info  # NEW: Include read-only status
             }
         })
 
@@ -1944,7 +2239,15 @@ def shopping_list_detail_api(request, list_id):
                     try:
                         item = ShoppingListItem.objects.get(id=item_id, shopping_list=lst)
                         if 'is_checked' in item_data:
-                            item.is_checked = item_data['is_checked']
+                            # Shopper updates shopper_collected, customer updates is_checked
+                            if is_assigned_shopper:
+                                item.shopper_collected = item_data['is_checked']
+                                if item_data['is_checked']:
+                                    item.collected_at = timezone.now()
+                                else:
+                                    item.collected_at = None
+                            else:
+                                item.is_checked = item_data['is_checked']
                         if 'quantity' in item_data:
                             item.quantity = item_data['quantity']
                         item.save()
@@ -3905,9 +4208,7 @@ def recall_matches_api(request):
     from shopright.models import RecallMatch
 
     # Check if user is premium (PREMIUM ONLY FEATURE)
-    subscription = SubscriptionService.get_or_create_subscription(request.user)
-
-    if not subscription.is_premium_active:
+    if not SubscriptionService.is_premium_user(request.user):
         logger.info(f"🚫 {request.user.username} tried to access recalls but is not premium")
         return JsonResponse({
             'premium_required': True,
@@ -4015,9 +4316,7 @@ def recall_detail_api(request, recall_id):
     from shopright.models import ProductRecall
 
     # Check if user is premium (PREMIUM ONLY FEATURE)
-    subscription = SubscriptionService.get_or_create_subscription(request.user)
-
-    if not subscription.is_premium_active:
+    if not SubscriptionService.is_premium_user(request.user):
         logger.info(f"🚫 {request.user.username} tried to view recall detail but is not premium")
         return JsonResponse({
             'error': 'PREMIUM_REQUIRED',
@@ -4078,9 +4377,8 @@ def confirm_recall_match_api(request, match_id):
         return JsonResponse({'error': 'POST required'}, status=405)
 
     # Check if user is premium (PREMIUM ONLY FEATURE)
-    subscription = SubscriptionService.get_or_create_subscription(request.user)
-
-    if not subscription.is_premium_active:
+    # Check premium status
+    if not SubscriptionService.is_premium_user(request.user):
         logger.info(f"🚫 {request.user.username} tried to confirm recall but is not premium")
         return JsonResponse({
             'error': 'PREMIUM_REQUIRED',
@@ -4140,7 +4438,7 @@ def dismiss_recall_match_api(request, match_id):
     # Check if user is premium (PREMIUM ONLY FEATURE)
     subscription = SubscriptionService.get_or_create_subscription(request.user)
 
-    if not subscription.is_premium_active:
+    if not SubscriptionService.is_premium_user(request.user):
         logger.info(f"🚫 {request.user.username} tried to dismiss recall but is not premium")
         return JsonResponse({
             'error': 'PREMIUM_REQUIRED',
@@ -4274,6 +4572,20 @@ def monthly_spending_api(request):
     if not (1 <= month <= 12):
         return JsonResponse({'error': 'Month must be 1-12'}, status=400)
 
+    # Check premium access for historical spending data (Basic: last 3 months only)
+    if not SubscriptionService.is_premium_user(request.user):
+        # Calculate 3 months ago from current date
+        three_months_ago = now.date() - timedelta(days=90)
+        requested_date = datetime(year, month, 1).date()
+
+        if requested_date < three_months_ago:
+            logger.info(f"🚫 {request.user.username} (Basic) tried to access spending data from {year}-{month:02d} but Basic users limited to last 3 months")
+            return JsonResponse({
+                'premium_required': True,
+                'message': 'Spending analytics older than 3 months requires Premium. Upgrade for unlimited history.',
+                'error': 'PREMIUM_REQUIRED_FOR_HISTORICAL_DATA'
+            }, status=403)
+
     # Get user's family
     try:
         family_member = FamilyMember.objects.get(user=request.user)
@@ -4391,6 +4703,9 @@ def spending_trend_api(request):
     now = datetime.now()
     months_data = []
 
+    # Check if user is premium for historical data access
+    is_premium = SubscriptionService.is_premium_user(request.user)
+
     for i in range(5, -1, -1):  # 6 months ago to now
         # Calculate target month
         target_month = now.month - i
@@ -4403,6 +4718,14 @@ def spending_trend_api(request):
         while target_month > 12:
             target_month -= 12
             target_year += 1
+
+        # Skip months older than 3 months for Basic users
+        if not is_premium:
+            target_date = datetime(target_year, target_month, 1).date()
+            three_months_ago = now.date() - timedelta(days=90)
+            if target_date < three_months_ago:
+                logger.info(f"🚫 Skipping {target_year}-{target_month:02d} for Basic user (older than 3 months)")
+                continue
 
         # Get all trips for this family in this month
         trips = ShoppingTrip.objects.filter(
@@ -4638,6 +4961,1038 @@ def _compare_single_item_price(reference_item, thirty_days_ago):
         'match_method': match_method,
         'has_barcode': bool(reference_item.barcode)
     }
+
+
+# ========================================
+# SHOPPER/DELIVERY SERVICE API
+# ========================================
+
+@require_firebase_auth
+def user_profile_api(request):
+    """
+    Get current user's profile information
+
+    GET /shopright/api/user-profile/
+
+    Returns: {
+        "user": {
+            "username": "+12193089382",
+            "first_name": "John",
+            "last_name": "Doe"
+        },
+        "profile": {
+            "account_type": "customer",
+            "is_approved_shopper": true,
+            "has_fcm_token": true
+        }
+    }
+    """
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Only GET allowed'}, status=405)
+
+    user = request.user
+
+    # Get or create profile
+    profile, created = UserProfile.objects.get_or_create(user=user)
+
+    return JsonResponse({
+        'user': {
+            'username': user.username,
+            'first_name': user.first_name,
+            'last_name': user.last_name
+        },
+        'profile': {
+            'account_type': profile.account_type,
+            'is_approved_shopper': profile.is_approved_shopper,
+            'has_fcm_token': bool(profile.fcm_token)
+        }
+    })
+
+
+@require_firebase_auth
+@require_approved_shopper
+def get_available_deliveries_api(request):
+    """
+    Get all deliveries available for shopper assignment
+    (Collaborative team workspace - ALL approved shoppers see ALL deliveries)
+
+    GET /shopright/api/shopper/available-deliveries/
+
+    Returns: {
+        "deliveries_by_store": [
+            {
+                "store_name": "Trader Joe's",
+                "store_location": "Sunnyvale, CA",
+                "delivery_date": "2025-12-14",
+                "deliveries": [
+                    {
+                        "id": 123,
+                        "customer_name": "John D.",
+                        "delivery_address": "123 Main St, Sunnyvale, CA",
+                        "estimated_amount": "85.00",
+                        "delivery_time": "2pm",
+                        "item_count": 15,
+                        "status": "pending_shopper",
+                        "shopping_list_id": 456
+                    }
+                ]
+            }
+        ]
+    }
+    """
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Only GET allowed'}, status=405)
+
+    # Get all weekly deliveries that need shopper assignment (from active subscriptions only)
+    deliveries = WeeklyDelivery.objects.filter(
+        status__in=['pending_shopper', 'scheduled'],
+        shopper__isnull=True,  # Only deliveries without assigned shopper
+        subscription__status__in=['active', 'pending_confirmation', 'setup_complete']  # Include setup_complete for add_delivery flow
+    ).select_related('subscription', 'shopping_list', 'shopper').order_by('delivery_date', 'subscription__store__name')
+
+    # Group by store and date
+    from collections import defaultdict
+    grouped = defaultdict(lambda: defaultdict(list))
+
+    for delivery in deliveries:
+        # Get store info from shopping list (primary) or subscription.store (fallback for partners)
+        if delivery.shopping_list:
+            store_name = delivery.shopping_list.store_name
+            store_location = delivery.shopping_list.store_location
+        elif delivery.subscription and delivery.subscription.store:
+            store_name = delivery.subscription.store.name
+            store_location = delivery.subscription.store.address
+        else:
+            store_name = "Unknown Store"
+            store_location = ""
+
+        delivery_date = delivery.delivery_date.isoformat()
+
+        # Get customer name (first name + last initial)
+        customer = delivery.subscription.customer if delivery.subscription else None
+        if customer:
+            customer_display = f"{customer.first_name or customer.username} {customer.last_name[0] if customer.last_name else ''}."
+        else:
+            customer_display = "Unknown"
+
+        # Get item count from shopping list (only "Need to Buy" items, not "Already Got")
+        item_count = delivery.shopping_list.list_items.filter(is_checked=False).count() if delivery.shopping_list else 0
+
+        # Build delivery dict
+        delivery_dict = {
+            'id': delivery.id,
+            'customer_name': customer_display,
+            'delivery_address': delivery.subscription.delivery_address if delivery.subscription else '',
+            'delivery_instructions': delivery.subscription.delivery_instructions if delivery.subscription else '',
+            'estimated_amount': str(delivery.actual_cost) if delivery.actual_cost else '0.00',
+            'delivery_time': delivery.delivery_window or (delivery.subscription.delivery_window if delivery.subscription else ''),
+            'item_count': item_count,
+            'status': delivery.status,
+            'shopping_list_id': delivery.shopping_list.id if delivery.shopping_list else None,
+            'shopper': delivery.shopper.username if delivery.shopper else None
+        }
+
+        grouped[(store_name, store_location)][delivery_date].append(delivery_dict)
+
+    # Convert to list format
+    deliveries_by_store = []
+    for (store_name, store_location) in sorted(grouped.keys()):
+        for delivery_date in sorted(grouped[(store_name, store_location)].keys()):
+            deliveries_by_store.append({
+                'store_name': store_name,
+                'store_location': store_location,
+                'delivery_date': delivery_date,
+                'deliveries': grouped[(store_name, store_location)][delivery_date]
+            })
+
+    logger.info(f"📦 Shopper {request.user.username} viewing {len(deliveries)} available deliveries")
+
+    return JsonResponse({
+        'deliveries_by_store': deliveries_by_store,
+        'total_count': len(deliveries)
+    })
+
+
+@csrf_exempt
+@require_firebase_auth
+@require_approved_shopper
+def assign_delivery_api(request):
+    """
+    Assign a delivery to yourself (shopper accepts the job)
+
+    POST /shopright/api/shopper/assign-delivery/
+    Body: {
+        "delivery_id": 123
+    }
+
+    Returns: {
+        "success": true,
+        "message": "Delivery assigned successfully",
+        "delivery": {...}
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    delivery_id = data.get('delivery_id')
+
+    if not delivery_id:
+        return JsonResponse({'error': 'Missing delivery_id'}, status=400)
+
+    try:
+        delivery = WeeklyDelivery.objects.get(id=delivery_id)
+    except WeeklyDelivery.DoesNotExist:
+        return JsonResponse({'error': 'Delivery not found'}, status=404)
+
+    # Check if delivery was cancelled
+    if delivery.status == 'cancelled':
+        return JsonResponse({
+            'success': False,
+            'error': 'This delivery was cancelled by the customer',
+            'status': 'cancelled'
+        }, status=410)  # 410 Gone
+
+    # Check if already assigned
+    if delivery.shopper:
+        return JsonResponse({
+            'success': False,
+            'error': 'This delivery was already assigned to another shopper',
+            'assigned_to': delivery.shopper.username
+        }, status=409)  # 409 Conflict
+
+    # Get subscription and customer info
+    subscription = delivery.subscription
+    if not subscription:
+        return JsonResponse({'error': 'No subscription found for this delivery'}, status=400)
+
+    customer = subscription.customer
+    if not customer:
+        return JsonResponse({'error': 'No customer found for this delivery'}, status=400)
+
+    # Get customer's payment info
+    customer_profile = UserProfile.objects.filter(user=customer).first()
+    if not customer_profile:
+        return JsonResponse({'error': 'Customer profile not found'}, status=400)
+
+    if not customer_profile.stripe_customer_id or not customer_profile.default_payment_method:
+        logger.error(f"❌ Customer {customer.username} has no payment method on file")
+        return JsonResponse({
+            'success': False,
+            'error': 'Customer has no payment method on file',
+            'payment_required': True
+        }, status=402)  # 402 Payment Required
+
+    # Check if subscription was already charged this week
+    # For Premium with 2 deliveries, we only charge once per week
+    from datetime import timedelta
+    week_start = delivery.delivery_date - timedelta(days=delivery.delivery_date.weekday())
+    week_end = week_start + timedelta(days=6)
+
+    # Check for other deliveries from same subscription this week that were already assigned (charged)
+    already_charged_delivery = WeeklyDelivery.objects.filter(
+        subscription=subscription,
+        delivery_date__gte=week_start,
+        delivery_date__lte=week_end,
+        status__in=['assigned', 'packing', 'ready', 'out_for_delivery', 'delivered']
+    ).exclude(id=delivery.id).first()
+
+    should_charge = not already_charged_delivery
+    subscription_amount = 30.00 if subscription.subscription_tier == 'premium' else 15.00
+
+    if should_charge:
+        # First delivery this week - charge subscription fee
+        from .services.stripe_service import StripeService
+        success, charge_id, error_msg = StripeService.charge_subscription_fee(
+            customer_id=customer_profile.stripe_customer_id,
+            payment_method_id=customer_profile.default_payment_method,
+            amount=subscription_amount,
+            description=f"ShopRight Weekly Delivery - {delivery.delivery_date.strftime('%b %d')}",
+            metadata={
+                'delivery_id': str(delivery.id),
+                'subscription_id': str(subscription.id),
+                'customer_username': customer.username,
+                'shopper_username': request.user.username
+            }
+        )
+
+        if not success:
+            # Payment failed - don't assign delivery
+            logger.error(f"❌ Payment failed for customer {customer.username}: {error_msg}")
+
+            # Send payment failed notification to customer
+            from .services.notification_service import NotificationService
+            NotificationService.send_subscription_payment_failed(
+                user=customer,
+                delivery_date=delivery.delivery_date
+            )
+
+            return JsonResponse({
+                'success': False,
+                'error': 'Customer payment failed',
+                'error_detail': error_msg,
+                'payment_failed': True
+            }, status=402)  # 402 Payment Required
+
+        logger.info(f"✅ Subscription fee ${subscription_amount} charged for delivery {delivery_id}")
+    else:
+        logger.info(f"ℹ️ Subscription already charged this week (delivery {already_charged_delivery.id}), skipping charge for delivery {delivery_id}")
+
+    # Payment successful! Now assign delivery
+    delivery.shopper = request.user
+    delivery.status = 'assigned'  # Shopper accepted, but hasn't started packing yet
+    delivery.save()
+
+    # RESET: Clear shopper_collected for all items (fresh start for new shopper)
+    # This ensures previous delivery's collected state doesn't carry over
+    if delivery.shopping_list:
+        reset_count = delivery.shopping_list.list_items.filter(shopper_collected=True).update(shopper_collected=False)
+        if reset_count > 0:
+            logger.info(f"🔄 Reset {reset_count} items' shopper_collected to False for new shopper assignment")
+
+    # Update subscription status to active
+    subscription.status = 'active'
+    subscription.save()
+
+    if should_charge:
+        logger.info(f"✅ Delivery {delivery_id} assigned to shopper {request.user.username} and ${subscription_amount} charged")
+
+        # Send confirmation notification to customer (only when charged)
+        from .services.notification_service import NotificationService
+        NotificationService.send_delivery_confirmed(
+            user=customer,
+            delivery_date=delivery.delivery_date,
+            amount=subscription_amount
+        )
+
+        return JsonResponse({
+            'success': True,
+            'message': f'Delivery assigned and customer charged ${subscription_amount}',
+            'delivery': {
+                'id': delivery.id,
+                'status': delivery.status,
+                'shopper': request.user.username,
+                'delivery_date': delivery.delivery_date.isoformat(),
+                'amount_charged': subscription_amount
+            }
+        })
+    else:
+        logger.info(f"✅ Delivery {delivery_id} assigned to shopper {request.user.username} (no charge - already paid this week)")
+
+        # Send simpler notification for 2nd delivery (no charge mentioned)
+        from .services.notification_service import NotificationService
+        NotificationService.send_notification(
+            user=customer,
+            title="✅ Delivery Confirmed",
+            body=f"Your delivery on {delivery.delivery_date.strftime('%a, %b %d')} is confirmed!",
+            data={
+                'delivery_date': delivery.delivery_date.isoformat(),
+                'action': 'open_deliveries'
+            },
+            notification_type='delivery_confirmed'
+        )
+
+        return JsonResponse({
+            'success': True,
+            'message': 'Delivery assigned (no additional charge - already paid this week)',
+            'delivery': {
+                'id': delivery.id,
+                'status': delivery.status,
+                'shopper': request.user.username,
+                'delivery_date': delivery.delivery_date.isoformat(),
+                'amount_charged': 0  # Already paid
+            }
+        })
+
+
+@csrf_exempt
+@require_firebase_auth
+@require_approved_shopper
+def deny_delivery_api(request):
+    """
+    Deny/reject a delivery (shopper cannot fulfill it)
+
+    POST /shopright/api/shopper/deny-delivery/
+    Body: {
+        "delivery_id": 123,
+        "reason": "Outside service area"  // Optional
+    }
+
+    Returns: {
+        "success": true,
+        "message": "Delivery cancelled. Customer was not charged."
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    delivery_id = data.get('delivery_id')
+    reason = data.get('reason', 'No shopper available')
+
+    if not delivery_id:
+        return JsonResponse({'error': 'Missing delivery_id'}, status=400)
+
+    try:
+        delivery = WeeklyDelivery.objects.get(id=delivery_id)
+    except WeeklyDelivery.DoesNotExist:
+        return JsonResponse({'error': 'Delivery not found'}, status=404)
+
+    # Only allow denying deliveries that haven't been accepted yet
+    if delivery.status not in ['scheduled', 'pending_shopper']:
+        return JsonResponse({
+            'error': 'Cannot deny this delivery',
+            'message': f'Delivery is already {delivery.status}. Only available deliveries can be denied.'
+        }, status=400)
+
+    # Get subscription and customer info
+    subscription = delivery.subscription
+    customer = subscription.customer if subscription else None
+
+    if not customer:
+        return JsonResponse({'error': 'No customer found for this delivery'}, status=400)
+
+    # Cancel THIS delivery only (no charge) - do NOT cancel the subscription!
+    # The subscription stays active for future deliveries
+    delivery.status = 'cancelled'
+    delivery.save()
+
+    # NOTE: We do NOT cancel the subscription here!
+    # Denying one delivery should not affect other deliveries or the subscription itself
+
+    logger.info(f"🚫 Delivery {delivery_id} denied by shopper {request.user.username}. Reason: {reason}")
+
+    # Notify customer that delivery is unavailable
+    from .services.notification_service import NotificationService
+    NotificationService.send_delivery_unavailable(
+        user=customer,
+        delivery_date=delivery.delivery_date,
+        reason=reason
+    )
+
+    return JsonResponse({
+        'success': True,
+        'message': 'Delivery denied. Customer was not charged.',
+        'delivery': {
+            'id': delivery.id,
+            'status': delivery.status,
+            'reason': reason
+        }
+    })
+
+
+@require_firebase_auth
+@require_approved_shopper
+def my_deliveries_api(request):
+    """
+    Get deliveries assigned to me (current shopper)
+
+    GET /shopright/api/shopper/my-deliveries/
+
+    Returns: {
+        "deliveries": [
+            {
+                "id": 123,
+                "customer_name": "John D.",
+                "delivery_address": "123 Main St, Sunnyvale, CA",
+                "shopping_list": {...},
+                "status": "assigned",
+                "delivery_date": "2025-12-14",
+                "assigned_at": "2025-12-10T10:00:00Z"
+            }
+        ],
+        "count": 5
+    }
+    """
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Only GET allowed'}, status=405)
+
+    # Get all deliveries assigned to me with active subscriptions only
+    deliveries = WeeklyDelivery.objects.filter(
+        shopper=request.user,
+        subscription__status__in=['active', 'pending_confirmation', 'setup_complete']  # Include setup_complete for add_delivery flow
+    ).exclude(
+        status='cancelled'  # Also exclude cancelled deliveries
+    ).select_related('subscription', 'shopping_list').order_by('delivery_date')
+
+    deliveries_data = []
+    for delivery in deliveries:
+        # Skip delivered deliveries - they should only appear in History tab
+        if delivery.status == 'delivered':
+            continue  # Don't show delivered deliveries in Active tab
+
+        customer = delivery.subscription.customer if delivery.subscription else None
+        customer_display = f"{customer.first_name or customer.username} {customer.last_name[0] if customer.last_name else ''}." if customer else "Unknown"
+
+        # Get shopping list items
+        shopping_list_data = None
+        if delivery.shopping_list:
+            items = delivery.shopping_list.list_items.all()
+            unchecked_count = items.filter(is_checked=False).count()
+            checked_count = items.filter(is_checked=True).count()
+            logger.info(f"📦 Delivery {delivery.id} → List {delivery.shopping_list.id}: total={items.count()}, need_to_buy={unchecked_count}, already_got={checked_count}")
+            shopping_list_data = {
+                'id': delivery.shopping_list.id,
+                'store_name': delivery.shopping_list.store_name,
+                'item_count': unchecked_count,  # FIX: Show only "Need to Buy" count, not total
+                'items': [
+                    {
+                        'id': item.id,
+                        'name': item.name,
+                        'brand': item.brand,
+                        'size': item.size,
+                        'quantity': item.quantity,
+                        'is_checked': item.is_checked,
+                        'shopper_collected': item.shopper_collected
+                    }
+                    for item in items.filter(is_checked=False)  # FIX: Only include "Need to Buy" items
+                ]
+            }
+
+        # Get shopping trip if receipt has been scanned
+        shopping_trip_data = None
+        if delivery.shopping_trip:
+            shopping_trip_data = {
+                'id': delivery.shopping_trip.id,
+                'store_name': delivery.shopping_trip.store_name,
+                'store_location': delivery.shopping_trip.store_location or '',
+                'trip_date': delivery.shopping_trip.trip_date.isoformat(),
+                'total_amount': str(delivery.shopping_trip.total_amount) if delivery.shopping_trip.total_amount else None,
+                'item_count': len(delivery.shopping_trip.items) if delivery.shopping_trip.items else 0
+            }
+
+        delivery_dict = {
+            'id': delivery.id,
+            'customer_name': customer_display,
+            'delivery_address': delivery.subscription.delivery_address if delivery.subscription else '',
+            'delivery_instructions': delivery.subscription.delivery_instructions if delivery.subscription else '',
+            'shopping_list': shopping_list_data,
+            'shopping_trip': shopping_trip_data,
+            'status': delivery.status,
+            'delivery_date': delivery.delivery_date.isoformat(),
+            'delivery_time': delivery.delivery_window or (delivery.subscription.delivery_window if delivery.subscription else ''),
+            'estimated_amount': str(delivery.estimated_cost or delivery.actual_cost) if (delivery.estimated_cost or delivery.actual_cost) else '0.00'
+        }
+        deliveries_data.append(delivery_dict)
+
+    logger.info(f"📋 Shopper {request.user.username} has {len(deliveries_data)} assigned deliveries")
+
+    return JsonResponse({
+        'deliveries': deliveries_data,
+        'count': len(deliveries_data)
+    })
+
+
+@csrf_exempt
+@require_firebase_auth
+@require_approved_shopper
+def my_past_deliveries_api(request):
+    """
+    Get past deliveries completed by me (current shopper) - for History tab
+
+    GET /shopright/api/shopper/my-past-deliveries/
+
+    Returns: {
+        "deliveries": [
+            {
+                "id": 123,
+                "customer_name": "John D.",
+                "delivery_address": "123 Main St, Sunnyvale, CA",
+                "shopping_list": {...},
+                "status": "delivered",
+                "delivery_date": "2025-12-14",
+                "delivered_at": "2025-12-14T15:30:00Z",
+                "actual_cost": "67.89"
+            }
+        ],
+        "count": 12
+    }
+    """
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Only GET allowed'}, status=405)
+
+    # Get past deliveries (delivered with inactive subscriptions OR cancelled)
+    past_deliveries = WeeklyDelivery.objects.filter(
+        shopper=request.user
+    ).select_related('subscription', 'shopping_list')
+
+    # Filter to only show truly "past" deliveries
+    filtered_past_deliveries = []
+    for delivery in past_deliveries:
+        if delivery.status == 'cancelled':
+            filtered_past_deliveries.append(delivery)
+        elif delivery.status == 'delivered':
+            # Show all delivered deliveries in History tab
+            filtered_past_deliveries.append(delivery)
+
+    # Sort by delivered date, then delivery date (most recent first)
+    # Convert delivery_date to timezone-aware datetime for consistent comparison
+    filtered_past_deliveries.sort(key=lambda d: d.delivered_at or timezone.make_aware(datetime.combine(d.delivery_date, datetime.min.time())), reverse=True)
+    past_deliveries = filtered_past_deliveries[:50]  # Limit to last 50
+
+    deliveries_data = []
+    for delivery in past_deliveries:
+        customer = delivery.subscription.customer if delivery.subscription else None
+        customer_display = f"{customer.first_name or customer.username} {customer.last_name[0] if customer.last_name else ''}." if customer else "Unknown"
+
+        # Get shopping list items
+        shopping_list_data = None
+        if delivery.shopping_list:
+            items = delivery.shopping_list.list_items.all()
+            shopping_list_data = {
+                'id': delivery.shopping_list.id,
+                'store_name': delivery.shopping_list.store_name,
+                'item_count': items.count(),
+                'items': [
+                    {
+                        'id': item.id,
+                        'name': item.name,
+                        'brand': item.brand,
+                        'size': item.size,
+                        'quantity': item.quantity,
+                        'is_checked': item.is_checked,
+                        'shopper_collected': item.shopper_collected
+                    }
+                    for item in items
+                ]
+            }
+
+        # Get shopping trip if receipt has been scanned (for past deliveries)
+        shopping_trip_data = None
+        if delivery.shopping_trip:
+            shopping_trip_data = {
+                'id': delivery.shopping_trip.id,
+                'store_name': delivery.shopping_trip.store_name,
+                'store_location': delivery.shopping_trip.store_location or '',
+                'trip_date': delivery.shopping_trip.trip_date.isoformat(),
+                'total_amount': str(delivery.shopping_trip.total_amount) if delivery.shopping_trip.total_amount else None,
+                'item_count': len(delivery.shopping_trip.items) if delivery.shopping_trip.items else 0
+            }
+
+        delivery_dict = {
+            'id': delivery.id,
+            'customer_name': customer_display,
+            'delivery_address': delivery.subscription.delivery_address if delivery.subscription else '',
+            'delivery_instructions': delivery.subscription.delivery_instructions if delivery.subscription else '',
+            'shopping_list': shopping_list_data,
+            'shopping_trip': shopping_trip_data,
+            'status': delivery.status,
+            'delivery_date': delivery.delivery_date.isoformat(),
+            'delivery_time': delivery.delivery_window or (delivery.subscription.delivery_window if delivery.subscription else ''),
+            'delivered_at': delivery.delivered_at.isoformat() if delivery.delivered_at else None,
+            'estimated_amount': str(delivery.actual_cost) if delivery.actual_cost else '0.00'  # For past deliveries, use actual_cost as estimated_amount
+        }
+        deliveries_data.append(delivery_dict)
+
+    logger.info(f"📋 Shopper {request.user.username} has {len(deliveries_data)} past deliveries")
+
+    return JsonResponse({
+        'deliveries': deliveries_data,
+        'count': len(deliveries_data)
+    })
+
+
+@csrf_exempt
+@require_firebase_auth
+@require_approved_shopper
+def start_packing_api(request):
+    """
+    Mark delivery as started packing and notify customer
+
+    POST /shopright/api/shopper/start-packing/
+    Body: {
+        "delivery_id": 123
+    }
+
+    Returns: {
+        "success": true,
+        "message": "Packing started successfully"
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    delivery_id = data.get('delivery_id')
+    if not delivery_id:
+        return JsonResponse({'error': 'Missing delivery_id'}, status=400)
+
+    try:
+        delivery = WeeklyDelivery.objects.get(id=delivery_id, shopper=request.user)
+    except WeeklyDelivery.DoesNotExist:
+        return JsonResponse({'error': 'Delivery not found or not assigned to you'}, status=404)
+
+    # Check if subscription is still active before allowing packing
+    if not delivery.subscription or delivery.subscription.status != 'active':
+        return JsonResponse({
+            'success': False,
+            'error': 'Cannot start packing. Customer subscription is no longer active.'
+        }, status=400)
+
+    # Check if delivery is in correct status
+    if delivery.status != 'assigned':
+        return JsonResponse({
+            'success': False,
+            'error': f'Cannot start packing. Delivery status is "{delivery.status}"'
+        }, status=400)
+
+    # Calculate estimated total and pre-authorize payment
+    estimated_total = 0.00
+    shopping_list = delivery.shopping_list
+    if shopping_list:
+        # RESET: Clear shopper_collected for all items (fresh start for new delivery)
+        # This ensures previous delivery's collected state doesn't carry over
+        reset_count = shopping_list.list_items.filter(shopper_collected=True).update(shopper_collected=False)
+        if reset_count > 0:
+            logger.info(f"🔄 Reset {reset_count} items' shopper_collected to False for fresh packing start")
+
+        # Calculate based only on UNCHECKED items (items still "Need to Buy")
+        # Don't charge for items already marked as "Already Got" (is_checked=True)
+        unchecked_items = shopping_list.list_items.filter(is_checked=False)
+
+        for item in unchecked_items:
+            try:
+                # Parse price string (e.g., "$3.99" -> 3.99)
+                price_str = item.price.replace('$', '').replace(',', '') if item.price else '0'
+                item_price = float(price_str) * item.quantity
+                estimated_total += item_price
+                logger.debug(f"💰 Unchecked Item: {item.name}, Price: ${price_str}, Qty: {item.quantity}, Subtotal: ${item_price}")
+            except (ValueError, TypeError):
+                # Skip items with invalid prices
+                logger.warning(f"⚠️ Skipping item with invalid price: {item.name}, price='{item.price}'")
+                continue
+
+    total_items = shopping_list.list_items.count() if shopping_list else 0
+    unchecked_count = shopping_list.list_items.filter(is_checked=False).count() if shopping_list else 0
+    logger.info(f"💰 Calculated estimated total: ${estimated_total} for {unchecked_count}/{total_items} unchecked items (excluding already purchased items)")
+
+    # Add 20% buffer for price changes/tax/fees
+    hold_amount = round(estimated_total * 1.2, 2)
+
+    # Pre-authorize payment with customer
+    try:
+        from .services.stripe_service import StripeService
+        customer = delivery.subscription.customer if delivery.subscription else None
+        if customer and hold_amount > 0:
+            # Convert dollars to cents for Stripe (Stripe expects integer cents)
+            hold_amount_cents = int(round(hold_amount * 100))
+
+            # Attempt to pre-authorize the hold amount
+            authorization_result = StripeService.pre_authorize_payment(
+                customer=customer,
+                amount=hold_amount_cents,  # Pass amount in cents
+                delivery_id=delivery.id
+            )
+            if not authorization_result.get('success'):
+                return JsonResponse({
+                    'success': False,
+                    'error': 'Customer payment authorization failed. Please ask customer to update their payment method.',
+                    'payment_error': True
+                }, status=402)  # Payment Required
+
+            # Store authorization ID and estimated cost for later capture
+            delivery.payment_authorization_id = authorization_result.get('authorization_id')
+            delivery.estimated_cost = estimated_total  # Store original estimated cost (before 20% buffer)
+
+    except Exception as e:
+        logger.error(f"Payment authorization failed for delivery {delivery_id}: {e}")
+        return JsonResponse({
+            'success': False,
+            'error': 'Payment system temporarily unavailable. Please try again.',
+            'payment_error': True
+        }, status=503)
+
+    # Update delivery status (only after successful payment authorization)
+    from django.utils import timezone
+    delivery.status = 'packing'
+    delivery.packing_started_at = timezone.now()
+    delivery.packed_by = request.user
+    delivery.save()
+
+    # Lock the shopping list for customer edits
+    shopping_list = delivery.shopping_list
+    if shopping_list:
+        shopping_list.locked_for_shopping = True
+        shopping_list.locked_at = timezone.now()
+        shopping_list.save()
+        logger.info(f"🔒 Shopping list {shopping_list.id} locked for delivery {delivery_id}")
+
+    # Send notification to customer with estimated hold amount
+    from .services.notification_service import NotificationService
+    customer = delivery.subscription.customer if delivery.subscription else None
+    if customer:
+        # Use the already calculated hold_amount from above (no need to recalculate)
+        NotificationService.send_shopping_started(
+            user=customer,
+            delivery_id=delivery.id,
+            hold_amount=hold_amount
+        )
+
+    logger.info(f"✅ Shopper {request.user.username} started packing delivery {delivery_id}")
+
+    return JsonResponse({
+        'success': True,
+        'message': 'Packing started successfully',
+        'delivery': {
+            'id': delivery.id,
+            'status': delivery.status,
+            'shopper': request.user.get_full_name() or request.user.username,
+            'delivery_date': delivery.delivery_date.isoformat(),
+            'packing_started_at': delivery.packing_started_at.isoformat()
+        }
+    })
+
+
+@csrf_exempt
+@require_firebase_auth
+@require_approved_shopper
+def mark_ready_api(request):
+    """
+    Mark delivery as ready for pickup and notify customer
+
+    POST /shopright/api/shopper/mark-ready/
+    Body: {
+        "delivery_id": 123
+    }
+
+    Returns: {
+        "success": true,
+        "message": "Delivery marked ready for pickup"
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    delivery_id = data.get('delivery_id')
+    if not delivery_id:
+        return JsonResponse({'error': 'Missing delivery_id'}, status=400)
+
+    try:
+        delivery = WeeklyDelivery.objects.get(id=delivery_id, shopper=request.user)
+    except WeeklyDelivery.DoesNotExist:
+        return JsonResponse({'error': 'Delivery not found or not assigned to you'}, status=404)
+
+    # Check if delivery is in correct status
+    if delivery.status != 'packing':
+        return JsonResponse({
+            'success': False,
+            'error': f'Cannot mark ready. Delivery status is "{delivery.status}"'
+        }, status=400)
+
+    # Update delivery status
+    from django.utils import timezone
+    delivery.status = 'ready'
+    delivery.packing_completed_at = timezone.now()
+    delivery.save()
+
+    # Skip notification for "ready" status - customer will be notified when delivery starts
+    logger.info(f"✅ Shopper {request.user.username} marked delivery {delivery_id} ready for pickup (no customer notification)")
+
+    return JsonResponse({
+        'success': True,
+        'message': 'Delivery marked ready for pickup',
+        'delivery': {
+            'id': delivery.id,
+            'status': delivery.status,
+            'shopper': request.user.get_full_name() or request.user.username,
+            'delivery_date': delivery.delivery_date.isoformat(),
+            'packing_completed_at': delivery.packing_completed_at.isoformat()
+        }
+    })
+
+
+@csrf_exempt
+@require_firebase_auth
+@require_approved_shopper
+def start_delivery_api(request):
+    """
+    API endpoint for shoppers to start delivery (out for delivery)
+    Changes status from 'ready' to 'out_for_delivery'
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    delivery_id = data.get('delivery_id')
+    if not delivery_id:
+        return JsonResponse({'error': 'Missing delivery_id'}, status=400)
+
+    try:
+        delivery = WeeklyDelivery.objects.get(id=delivery_id, shopper=request.user)
+    except WeeklyDelivery.DoesNotExist:
+        return JsonResponse({'error': 'Delivery not found or not assigned to you'}, status=404)
+
+    # Check if delivery is in correct status
+    if delivery.status != 'ready':
+        return JsonResponse({
+            'success': False,
+            'error': f'Cannot start delivery. Delivery status is "{delivery.status}"'
+        }, status=400)
+
+    # Update delivery status
+    from django.utils import timezone
+    delivery.status = 'out_for_delivery'
+    delivery.picked_up_at = timezone.now()
+    delivery.save()
+
+    # Send notification to customer
+    from .services.notification_service import NotificationService
+    customer = delivery.subscription.customer if delivery.subscription else None
+    if customer:
+        NotificationService.send_delivery_status_update(
+            user=customer,
+            delivery_id=delivery.id,
+            status='out_for_delivery'
+        )
+
+    logger.info(f"✅ Shopper {request.user.username} started delivery {delivery_id}")
+
+    return JsonResponse({
+        'success': True,
+        'message': 'Delivery started - out for delivery',
+        'delivery': {
+            'id': delivery.id,
+            'status': delivery.status,
+            'shopper': request.user.get_full_name() or request.user.username,
+            'delivery_date': delivery.delivery_date.isoformat(),
+            'picked_up_at': delivery.picked_up_at.isoformat()
+        }
+    })
+
+
+@csrf_exempt
+@require_firebase_auth
+@require_approved_shopper
+def mark_delivered_api(request):
+    """
+    API endpoint for shoppers to mark delivery as delivered
+    Changes status from 'out_for_delivery' to 'delivered'
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    delivery_id = data.get('delivery_id')
+    if not delivery_id:
+        return JsonResponse({'error': 'Missing delivery_id'}, status=400)
+
+    try:
+        delivery = WeeklyDelivery.objects.get(id=delivery_id, shopper=request.user)
+    except WeeklyDelivery.DoesNotExist:
+        return JsonResponse({'error': 'Delivery not found or not assigned to you'}, status=404)
+
+    # Check if delivery is in correct status
+    if delivery.status != 'out_for_delivery':
+        return JsonResponse({
+            'success': False,
+            'error': f'Cannot mark delivered. Delivery status is "{delivery.status}"'
+        }, status=400)
+
+    # Update delivery status
+    from django.utils import timezone
+    delivery.status = 'delivered'
+    delivery.delivered_at = timezone.now()
+    delivery.save()
+
+    # Auto-create next week's delivery for weekly subscription (before notifications)
+    next_delivery_created = False
+    if delivery.subscription and delivery.subscription.status == 'active':
+        try:
+            from datetime import timedelta
+
+            # Double-check subscription is still active and not cancelled
+            subscription = delivery.subscription
+            subscription.refresh_from_db()  # Get latest status from database
+
+            if subscription.status != 'active':
+                logger.info(f"Subscription {subscription.id} is no longer active, skipping auto-creation")
+            else:
+                # Calculate next delivery date (add 7 days)
+                current_delivery_date = delivery.delivery_date
+                next_delivery_date = current_delivery_date + timedelta(days=7)
+
+                logger.info(f"🔄 Attempting to create next week's delivery for {next_delivery_date}")
+
+                # Check if next delivery doesn't already exist (prevent duplicates)
+                existing_next_delivery = WeeklyDelivery.objects.filter(
+                    subscription=subscription,
+                    delivery_date=next_delivery_date
+                ).first()
+
+                if existing_next_delivery:
+                    logger.info(f"Next delivery already exists for {next_delivery_date}, skipping auto-creation")
+                else:
+                    # Create next week's delivery
+                    next_delivery = WeeklyDelivery.objects.create(
+                        subscription=subscription,
+                        delivery_date=next_delivery_date,
+                        status='scheduled',  # New status for upcoming deliveries
+                        shopping_list=delivery.shopping_list,  # Reuse same shopping list
+                        shopper=request.user,  # Auto-assign to same shopper (employee)
+                    )
+
+                    logger.info(f"✅ Auto-created next week's delivery {next_delivery.id} for {next_delivery_date}")
+                    next_delivery_created = True
+
+        except Exception as e:
+            logger.error(f"Failed to auto-create next delivery: {e}")
+            # Don't fail the main delivery completion if auto-creation fails
+
+    # Send notification to customer (after auto-creation)
+    from .services.notification_service import NotificationService
+    customer = delivery.subscription.customer if delivery.subscription else None
+    if customer:
+        NotificationService.send_delivery_status_update(
+            user=customer,
+            delivery_id=delivery.id,
+            status='delivered'
+        )
+
+    logger.info(f"✅ Shopper {request.user.username} delivered delivery {delivery_id}")
+
+    response_data = {
+        'success': True,
+        'message': 'Delivery completed successfully!',
+        'delivery': {
+            'id': delivery.id,
+            'status': delivery.status,
+            'shopper': request.user.get_full_name() or request.user.username,
+            'delivery_date': delivery.delivery_date.isoformat(),
+            'delivered_at': delivery.delivered_at.isoformat()
+        }
+    }
+
+    # Add info about next week's delivery creation
+    if next_delivery_created:
+        response_data['next_delivery_created'] = True
+        response_data['message'] = 'Delivery completed successfully! Next week\'s delivery has been scheduled.'
+
+    return JsonResponse(response_data)
 
 
 # ========================================

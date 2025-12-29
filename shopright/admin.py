@@ -1,9 +1,65 @@
 from django.contrib import admin
+from django.utils import timezone
 from .models import (
     Family, FamilyMember, ShoppingTrip, GroceryItem,
     ShoppingList, ShoppingListItem, AisleLocation,
-    ProductRecall, RecallMatch, UserSubscription
+    ProductRecall, RecallMatch, UserSubscription, UserProfile,
+    # Delivery Service Models
+    DeliveryZone, Store, Shopper, DeliverySubscription, WeeklyDelivery
 )
+
+
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    list_display = ('user', 'account_type', 'is_approved_shopper', 'shopper_approved_at', 'fcm_token_status')
+    list_filter = ('is_approved_shopper', 'account_type')
+    search_fields = ('user__username', 'user__first_name', 'user__last_name')
+    readonly_fields = ('created_at', 'updated_at', 'shopper_approved_by', 'shopper_approved_at')
+
+    actions = ['approve_as_shopper', 'revoke_shopper_access']
+
+    fieldsets = (
+        ('User', {
+            'fields': ('user', 'account_type')
+        }),
+        ('Shopper Approval', {
+            'fields': ('is_approved_shopper', 'shopper_approved_by', 'shopper_approved_at')
+        }),
+        ('Payment & Notifications', {
+            'fields': ('stripe_customer_id', 'default_payment_method', 'fcm_token')
+        }),
+        ('Store Association', {
+            'fields': ('store',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at')
+        }),
+    )
+
+    def fcm_token_status(self, obj):
+        return '✅ Set' if obj.fcm_token else '❌ Not set'
+    fcm_token_status.short_description = 'FCM Token'
+
+    def approve_as_shopper(self, request, queryset):
+        """Approve selected users as shoppers"""
+        for profile in queryset:
+            profile.is_approved_shopper = True
+            profile.shopper_approved_by = request.user
+            profile.shopper_approved_at = timezone.now()
+            profile.save()
+
+        self.message_user(request, f"{queryset.count()} shopper(s) approved")
+    approve_as_shopper.short_description = "Approve as shopper"
+
+    def revoke_shopper_access(self, request, queryset):
+        """Revoke shopper access"""
+        queryset.update(
+            is_approved_shopper=False,
+            shopper_approved_by=None,
+            shopper_approved_at=None
+        )
+        self.message_user(request, f"{queryset.count()} shopper(s) revoked")
+    revoke_shopper_access.short_description = "Revoke shopper access"
 
 
 @admin.register(Family)
@@ -294,3 +350,132 @@ class UserSubscriptionAdmin(admin.ModelAdmin):
     is_premium_active.boolean = True
     is_premium_active.short_description = 'Premium Active'
 
+
+# ========================================
+# DELIVERY SERVICE ADMIN
+# ========================================
+
+@admin.register(WeeklyDelivery)
+class WeeklyDeliveryAdmin(admin.ModelAdmin):
+    list_display = ('id', 'delivery_date', 'customer_name', 'shopper_name', 'status', 'store_name', 'created_at')
+    list_filter = ('status', 'delivery_date', 'created_at')
+    search_fields = ('subscription__customer__username', 'shopper__username')
+    readonly_fields = ('created_at', 'updated_at', 'packing_started_at', 'packing_completed_at', 'picked_up_at', 'delivered_at')
+
+    actions = ['reset_to_scheduled', 'mark_as_delivered']
+
+    fieldsets = (
+        ('Delivery Info', {
+            'fields': ('delivery_date', 'subscription', 'shopping_list', 'status')
+        }),
+        ('Assignment', {
+            'fields': ('shopper',)
+        }),
+        ('Timing', {
+            'fields': ('packing_started_at', 'packing_completed_at', 'picked_up_at', 'delivered_at')
+        }),
+        ('Financial', {
+            'fields': ('actual_cost', 'commission_amount')
+        }),
+        ('Receipt & Feedback', {
+            'fields': ('receipt_image', 'shopping_trip', 'customer_rating', 'customer_feedback')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at')
+        }),
+    )
+
+    def customer_name(self, obj):
+        return obj.subscription.customer.username if obj.subscription else 'No customer'
+    customer_name.short_description = 'Customer'
+
+    def shopper_name(self, obj):
+        return obj.shopper.username if obj.shopper else 'Unassigned'
+    shopper_name.short_description = 'Shopper'
+
+    def store_name(self, obj):
+        return obj.subscription.store.name if obj.subscription and obj.subscription.store else 'No store'
+    store_name.short_description = 'Store'
+
+    def reset_to_scheduled(self, request, queryset):
+        """Reset deliveries to scheduled status (unassign from shopper)"""
+        for delivery in queryset:
+            delivery.status = 'scheduled'
+            delivery.shopper = None
+            delivery.packing_started_at = None
+            delivery.packing_completed_at = None
+            delivery.packed_by = None
+            delivery.picked_up_at = None
+            delivery.delivered_at = None
+            delivery.save()
+
+        self.message_user(request, f"Reset {queryset.count()} deliveries to 'scheduled' status")
+    reset_to_scheduled.short_description = "🔄 Reset to Scheduled (unassign)"
+
+    def mark_as_delivered(self, request, queryset):
+        """Mark deliveries as delivered"""
+        queryset.update(status='delivered', delivered_at=timezone.now())
+        self.message_user(request, f"Marked {queryset.count()} deliveries as delivered")
+    mark_as_delivered.short_description = "✅ Mark as Delivered"
+
+
+@admin.register(DeliverySubscription)
+class DeliverySubscriptionAdmin(admin.ModelAdmin):
+    list_display = ('customer', 'store', 'delivery_day', 'delivery_window', 'subscription_tier', 'status', 'created_at')
+    list_filter = ('status', 'subscription_tier', 'delivery_day')
+    search_fields = ('customer__username', 'store__name')
+    readonly_fields = ('created_at', 'updated_at', 'stripe_subscription_id')
+
+
+@admin.register(Shopper)
+class ShopperAdmin(admin.ModelAdmin):
+    list_display = ('user', 'full_name', 'phone', 'background_check_status', 'is_active', 'rating', 'total_deliveries')
+    list_filter = ('background_check_status', 'is_active')
+    search_fields = ('user__username', 'full_name', 'phone')
+    readonly_fields = ('created_at', 'total_deliveries')
+
+
+@admin.register(Store)
+class StoreAdmin(admin.ModelAdmin):
+    list_display = ('name', 'owner', 'commission_rate', 'is_active', 'created_at')
+    list_filter = ('is_active', 'commission_rate')
+    search_fields = ('name', 'address', 'owner__username')
+    readonly_fields = ('created_at',)
+
+
+@admin.register(DeliveryZone)
+class DeliveryZoneAdmin(admin.ModelAdmin):
+    list_display = ('name', 'zip_count', 'is_active', 'created_at')
+    list_filter = ('is_active', 'created_at')
+    search_fields = ('name', 'zip_codes')
+    readonly_fields = ('created_at',)
+
+    fieldsets = (
+        ('Zone Information', {
+            'fields': ('name', 'is_active')
+        }),
+        ('ZIP Codes', {
+            'fields': ('zip_codes',),
+            'description': 'Enter ZIP codes as a JSON array, e.g. ["94102", "94103", "94104"]'
+        }),
+        ('Metadata', {
+            'fields': ('created_at',)
+        }),
+    )
+
+    def zip_count(self, obj):
+        """Show number of ZIP codes in this zone"""
+        return len(obj.zip_codes) if obj.zip_codes else 0
+    zip_count.short_description = 'ZIP Count'
+
+    def get_form(self, request, obj=None, **kwargs):
+        """Customize form to show helpful ZIP code format"""
+        form = super().get_form(request, obj, **kwargs)
+        if 'zip_codes' in form.base_fields:
+            form.base_fields['zip_codes'].help_text = '''
+            Enter ZIP codes as JSON array format. Examples:
+            • Bay Area: ["94102", "94103", "94104", "94301", "95014"]
+            • Single ZIP: ["94102"]
+            • Large area: ["94102", "94103", "94104", "94105", "94107", "94108"]
+            '''
+        return form

@@ -117,3 +117,57 @@ def require_premium_subscription(view_func):
         return view_func(request, *args, **kwargs)
 
     return wrapper
+
+
+def require_approved_shopper(view_func):
+    """
+    Decorator to ensure user is an approved shopper
+
+    Only users with is_approved_shopper=True can access shopper endpoints.
+    This prevents unauthorized users from seeing all delivery data.
+
+    Usage:
+        @csrf_exempt
+        @require_firebase_auth
+        @require_approved_shopper
+        def get_available_deliveries(request):
+            # Only approved shoppers can access this
+            ...
+
+    Returns:
+        401 if not authenticated
+        403 if not approved shopper
+        Proceeds to wrapped function if approved
+    """
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        user = request.user
+
+        # Check authentication
+        if not user.is_authenticated:
+            logger.warning("❌ Shopper endpoint accessed without authentication")
+            return JsonResponse({
+                'error': 'Authentication required'
+            }, status=401)
+
+        # Check if user has profile
+        if not hasattr(user, 'profile'):
+            logger.error(f"❌ User {user.username} has no profile")
+            return JsonResponse({
+                'error': 'User profile not found'
+            }, status=403)
+
+        # Check if approved shopper
+        profile = user.profile
+        if not profile.is_approved_shopper:
+            logger.warning(f"❌ Unauthorized shopper access attempt by user {user.username}")
+            return JsonResponse({
+                'error': 'Unauthorized. You must be an approved shopper to access this resource.',
+                'approved': False
+            }, status=403)
+
+        # User is approved shopper - proceed
+        logger.info(f"✅ Shopper endpoint access granted for {user.username}")
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
