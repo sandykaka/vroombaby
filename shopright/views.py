@@ -2259,6 +2259,7 @@ def shopping_list_detail_api(request, list_id):
                     'message': status_messages.get(delivery.status, 'Your order is currently being processed by a shopper.'),
                     'delivery_status': delivery.status,
                     'shopper_name': shopper_name,
+                    'shopper_phone': delivery.shopper.username if delivery.shopper else None,  # Username is phone
                     'delivery_date': delivery.delivery_date.isoformat() if delivery.delivery_date else None,
                     'delivery_id': delivery.id  # Include delivery ID for debugging
                 }

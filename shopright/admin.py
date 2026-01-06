@@ -398,8 +398,16 @@ class WeeklyDeliveryAdmin(admin.ModelAdmin):
     store_name.short_description = 'Store'
 
     def reset_to_scheduled(self, request, queryset):
-        """Reset deliveries to scheduled status (unassign from shopper)"""
+        """Reset deliveries to scheduled status (unassign from shopper) and notify other shoppers"""
+        from .services.notification_service import NotificationService
+        from django.contrib.auth.models import User
+
+        reset_count = 0
         for delivery in queryset:
+            # Skip already scheduled/cancelled/delivered
+            if delivery.status in ['cancelled', 'delivered']:
+                continue
+
             delivery.status = 'scheduled'
             delivery.shopper = None
             delivery.packing_started_at = None
@@ -408,9 +416,26 @@ class WeeklyDeliveryAdmin(admin.ModelAdmin):
             delivery.picked_up_at = None
             delivery.delivered_at = None
             delivery.save()
+            reset_count += 1
 
-        self.message_user(request, f"Reset {queryset.count()} deliveries to 'scheduled' status")
-    reset_to_scheduled.short_description = "🔄 Reset to Scheduled (unassign)"
+            # Notify all approved shoppers about available delivery
+            try:
+                approved_shoppers = User.objects.filter(
+                    profile__account_type='shopper',
+                    profile__is_approved_shopper=True
+                )
+
+                for shopper in approved_shoppers:
+                    NotificationService.send_new_delivery_available(
+                        user=shopper,
+                        store_name=delivery.shopping_list.store_name if delivery.shopping_list else 'Unknown Store',
+                        delivery_date=delivery.delivery_date
+                    )
+            except Exception as e:
+                self.message_user(request, f"Warning: Failed to notify shoppers for delivery {delivery.id}: {e}", level='warning')
+
+        self.message_user(request, f"Reset {reset_count} deliveries to 'scheduled' status. Shoppers notified.")
+    reset_to_scheduled.short_description = "🔄 Reset to Scheduled (unassign & notify shoppers)"
 
     def mark_as_delivered(self, request, queryset):
         """Mark deliveries as delivered"""

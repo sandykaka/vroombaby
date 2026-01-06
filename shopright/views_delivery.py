@@ -1348,12 +1348,22 @@ def my_subscriptions(request):
 
             if upcoming_deliveries.exists():
                 next_delivery = upcoming_deliveries.first()  # Get earliest delivery
+
+                # Get shopper info if assigned
+                shopper_info = None
+                if next_delivery.shopper:
+                    shopper_info = {
+                        'name': next_delivery.shopper.username,
+                        'phone': next_delivery.shopper.username  # Username is phone number
+                    }
+
                 next_delivery_info = {
                     'id': next_delivery.id,
                     'date': next_delivery.delivery_date.isoformat(),
                     'status': next_delivery.status,
                     'store_name': next_delivery.shopping_list.store_name if next_delivery.shopping_list else 'Unknown Store',
-                    'delivery_day': next_delivery.delivery_date.strftime('%A') if next_delivery.delivery_date else sub.delivery_day
+                    'delivery_day': next_delivery.delivery_date.strftime('%A') if next_delivery.delivery_date else sub.delivery_day,
+                    'shopper': shopper_info
                 }
 
                 # Collect all delivery info (for both Basic and Premium)
@@ -2395,6 +2405,100 @@ def shopper_respond_to_delivery(request):
         return JsonResponse({'error': 'Invalid JSON'}, status=400)
     except Exception as e:
         logger.error(f"Shopper respond error: {e}", exc_info=True)
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_firebase_auth
+@require_account_type('shopper')
+@require_http_methods(["POST"])
+def shopper_release_delivery(request):
+    """
+    Shopper releases an assigned delivery back to available pool
+
+    POST /api/delivery/shopper-release/
+    Body: {
+        "delivery_id": 123,
+        "reason": "Optional reason for release"
+    }
+
+    Only allowed when status is 'assigned' (before packing starts).
+    Delivery goes back to 'scheduled' status for other shoppers to accept.
+    """
+    try:
+        data = json.loads(request.body)
+        delivery_id = data.get('delivery_id')
+        reason = data.get('reason', '')
+
+        if not delivery_id:
+            return JsonResponse({'error': 'Missing delivery_id'}, status=400)
+
+        # Get the delivery
+        try:
+            delivery = WeeklyDelivery.objects.get(id=delivery_id)
+        except WeeklyDelivery.DoesNotExist:
+            return JsonResponse({'error': 'Delivery not found'}, status=404)
+
+        # Verify this shopper owns this delivery
+        if delivery.shopper != request.user:
+            return JsonResponse({'error': 'You are not assigned to this delivery'}, status=403)
+
+        # Only allow release when status is 'assigned' (before packing)
+        if delivery.status != 'assigned':
+            status_messages = {
+                'packing': 'Cannot release - you have already started shopping. Please complete or contact admin.',
+                'ready': 'Cannot release - order is ready for delivery. Please complete or contact admin.',
+                'out_for_delivery': 'Cannot release - you are currently delivering. Please complete the delivery.',
+                'delivered': 'This delivery has already been completed.',
+                'cancelled': 'This delivery has been cancelled.',
+                'scheduled': 'This delivery is not assigned to you.'
+            }
+            return JsonResponse({
+                'error': status_messages.get(delivery.status, 'Cannot release delivery in current status')
+            }, status=400)
+
+        # Release the delivery
+        delivery.shopper = None
+        delivery.status = 'scheduled'
+        delivery.save()
+
+        logger.info(f"Shopper {request.user.username} released delivery {delivery_id}. Reason: {reason}")
+
+        # Notify all approved shoppers about available delivery
+        from .services.notification_service import NotificationService
+
+        def send_notifications(delivery_id=delivery.id):
+            try:
+                delivery_obj = WeeklyDelivery.objects.get(id=delivery_id)
+                approved_shoppers = User.objects.filter(
+                    profile__account_type='shopper',
+                    profile__is_approved_shopper=True
+                ).exclude(id=request.user.id)  # Exclude the releasing shopper
+
+                for shopper in approved_shoppers:
+                    NotificationService.send_new_delivery_available(
+                        user=shopper,
+                        store_name=delivery_obj.shopping_list.store_name if delivery_obj.shopping_list else 'Unknown Store',
+                        delivery_date=delivery_obj.delivery_date
+                    )
+                logger.info(f"Notified {approved_shoppers.count()} shoppers about released delivery {delivery_id}")
+            except Exception as e:
+                logger.error(f"Failed to notify shoppers about released delivery: {e}")
+
+        # Run notifications after response
+        from django.db import transaction
+        transaction.on_commit(lambda: send_notifications())
+
+        return JsonResponse({
+            'success': True,
+            'message': 'Delivery released successfully. Other shoppers can now accept it.',
+            'delivery_id': delivery_id
+        })
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        logger.error(f"Shopper release error: {e}", exc_info=True)
         return JsonResponse({'error': str(e)}, status=500)
 
 

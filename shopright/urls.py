@@ -107,6 +107,7 @@ urlpatterns = [
     path('api/shopper/assign-delivery/', views.assign_delivery_api, name='assign_delivery'),
     path('api/shopper/deny-delivery/', views.deny_delivery_api, name='deny_delivery'),
     path('api/shopper/respond-to-delivery/', views_delivery.shopper_respond_to_delivery, name='shopper_respond_to_delivery'),
+    path('api/shopper/release-delivery/', views_delivery.shopper_release_delivery, name='shopper_release_delivery'),
     path('api/shopper/my-deliveries/', views.my_deliveries_api, name='my_deliveries'),
     path('api/shopper/my-past-deliveries/', views.my_past_deliveries_api, name='my_past_deliveries'),
     path('api/shopper/start-packing/', views.start_packing_api, name='start_packing'),
