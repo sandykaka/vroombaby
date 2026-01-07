@@ -5259,6 +5259,7 @@ def assign_delivery_api(request):
     # Check if subscription was already charged this week
     # Look for any delivery from this subscription this week that has payment_authorization_id
     # (payment_authorization_id exists = customer was charged)
+    # IMPORTANT: Don't exclude current delivery - we want to check if THIS or any other was charged
     from datetime import timedelta
     week_start = delivery.delivery_date - timedelta(days=delivery.delivery_date.weekday())
     week_end = week_start + timedelta(days=6)
@@ -5268,7 +5269,7 @@ def assign_delivery_api(request):
         delivery_date__gte=week_start,
         delivery_date__lte=week_end,
         payment_authorization_id__isnull=False  # Has payment ID = was charged
-    ).exclude(id=delivery.id).exists()
+    ).exists()  # Check THIS delivery AND any other delivery
 
     should_charge = not already_charged_this_week
     subscription_amount = 30.00 if subscription.subscription_tier == 'premium' else 15.00

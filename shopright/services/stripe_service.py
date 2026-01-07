@@ -510,6 +510,7 @@ class StripeService:
                 capture_method='manual',  # This creates a hold instead of charging immediately
                 confirm=True,
                 off_session=True,  # Indicates customer is not present (server-side payment)
+                statement_descriptor='GroceryGuard',
                 metadata={
                     'delivery_id': str(delivery_id),
                     'type': 'grocery_delivery_hold',
@@ -590,6 +591,7 @@ class StripeService:
                         payment_method=payment_intent.payment_method,
                         confirm=True,
                         off_session=True,
+                        statement_descriptor='GroceryGuard',
                         metadata={
                             'delivery_id': str(delivery_id),
                             'type': 'grocery_delivery_adjustment',
@@ -656,6 +658,7 @@ class StripeService:
                     payment_method=payment_intent.payment_method,
                     confirm=True,
                     off_session=True,
+                    statement_descriptor='GroceryGuard',
                     metadata={
                         'delivery_id': str(delivery_id),
                         'type': 'grocery_delivery_additional_charge',
