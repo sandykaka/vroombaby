@@ -427,9 +427,8 @@ class WeeklyDeliveryAdmin(admin.ModelAdmin):
 
                 for shopper in approved_shoppers:
                     NotificationService.send_new_delivery_available(
-                        user=shopper,
-                        store_name=delivery.shopping_list.store_name if delivery.shopping_list else 'Unknown Store',
-                        delivery_date=delivery.delivery_date
+                        shopper=shopper,
+                        delivery=delivery
                     )
             except Exception as e:
                 self.message_user(request, f"Warning: Failed to notify shoppers for delivery {delivery.id}: {e}", level='warning')

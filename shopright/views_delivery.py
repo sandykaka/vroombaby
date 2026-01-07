@@ -2477,9 +2477,8 @@ def shopper_release_delivery(request):
 
                 for shopper in approved_shoppers:
                     NotificationService.send_new_delivery_available(
-                        user=shopper,
-                        store_name=delivery_obj.shopping_list.store_name if delivery_obj.shopping_list else 'Unknown Store',
-                        delivery_date=delivery_obj.delivery_date
+                        shopper=shopper,
+                        delivery=delivery_obj
                     )
                 logger.info(f"Notified {approved_shoppers.count()} shoppers about released delivery {delivery_id}")
             except Exception as e:
