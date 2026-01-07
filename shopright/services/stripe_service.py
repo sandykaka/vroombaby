@@ -433,7 +433,7 @@ class StripeService:
                 off_session=True,  # Customer is not present for this charge
                 confirm=True,  # Auto-confirm the payment
                 description=description,
-                statement_descriptor='GroceryGuard',  # Appears on credit card statement (max 22 chars)
+                statement_descriptor_suffix='GroceryGuard',  # Appears on credit card statement (max 22 chars)
                 metadata=metadata or {}
             )
 
@@ -510,7 +510,7 @@ class StripeService:
                 capture_method='manual',  # This creates a hold instead of charging immediately
                 confirm=True,
                 off_session=True,  # Indicates customer is not present (server-side payment)
-                statement_descriptor='GroceryGuard',
+                statement_descriptor_suffix='GroceryGuard',
                 metadata={
                     'delivery_id': str(delivery_id),
                     'type': 'grocery_delivery_hold',
@@ -591,7 +591,7 @@ class StripeService:
                         payment_method=payment_intent.payment_method,
                         confirm=True,
                         off_session=True,
-                        statement_descriptor='GroceryGuard',
+                        statement_descriptor_suffix='GroceryGuard',
                         metadata={
                             'delivery_id': str(delivery_id),
                             'type': 'grocery_delivery_adjustment',
@@ -658,7 +658,7 @@ class StripeService:
                     payment_method=payment_intent.payment_method,
                     confirm=True,
                     off_session=True,
-                    statement_descriptor='GroceryGuard',
+                    statement_descriptor_suffix='GroceryGuard',
                     metadata={
                         'delivery_id': str(delivery_id),
                         'type': 'grocery_delivery_additional_charge',
