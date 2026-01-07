@@ -433,6 +433,7 @@ class StripeService:
                 off_session=True,  # Customer is not present for this charge
                 confirm=True,  # Auto-confirm the payment
                 description=description,
+                statement_descriptor='GroceryGuard',  # Appears on credit card statement (max 22 chars)
                 metadata=metadata or {}
             )
 

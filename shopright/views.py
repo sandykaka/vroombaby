@@ -5257,20 +5257,20 @@ def assign_delivery_api(request):
         }, status=402)  # 402 Payment Required
 
     # Check if subscription was already charged this week
-    # For Premium with 2 deliveries, we only charge once per week
+    # Look for any delivery from this subscription this week that has payment_authorization_id
+    # (payment_authorization_id exists = customer was charged)
     from datetime import timedelta
     week_start = delivery.delivery_date - timedelta(days=delivery.delivery_date.weekday())
     week_end = week_start + timedelta(days=6)
 
-    # Check for other deliveries from same subscription this week that were already assigned (charged)
-    already_charged_delivery = WeeklyDelivery.objects.filter(
+    already_charged_this_week = WeeklyDelivery.objects.filter(
         subscription=subscription,
         delivery_date__gte=week_start,
         delivery_date__lte=week_end,
-        status__in=['assigned', 'packing', 'ready', 'out_for_delivery', 'delivered']
-    ).exclude(id=delivery.id).first()
+        payment_authorization_id__isnull=False  # Has payment ID = was charged
+    ).exclude(id=delivery.id).exists()
 
-    should_charge = not already_charged_delivery
+    should_charge = not already_charged_this_week
     subscription_amount = 30.00 if subscription.subscription_tier == 'premium' else 15.00
 
     if should_charge:
@@ -5308,8 +5308,12 @@ def assign_delivery_api(request):
             }, status=402)  # 402 Payment Required
 
         logger.info(f"✅ Subscription fee ${subscription_amount} charged for delivery {delivery_id}")
+
+        # Store payment ID to prevent duplicate charges
+        delivery.payment_authorization_id = charge_id
+        delivery.save()
     else:
-        logger.info(f"ℹ️ Subscription already charged this week (delivery {already_charged_delivery.id}), skipping charge for delivery {delivery_id}")
+        logger.info(f"ℹ️ Subscription already charged this week, skipping charge for delivery {delivery_id}")
 
     # Payment successful! Now assign delivery
     delivery.shopper = request.user
