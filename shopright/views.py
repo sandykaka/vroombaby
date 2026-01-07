@@ -5264,14 +5264,27 @@ def assign_delivery_api(request):
     week_start = delivery.delivery_date - timedelta(days=delivery.delivery_date.weekday())
     week_end = week_start + timedelta(days=6)
 
-    already_charged_this_week = WeeklyDelivery.objects.filter(
-        subscription=subscription,
-        delivery_date__gte=week_start,
-        delivery_date__lte=week_end,
-        payment_authorization_id__isnull=False  # Has payment ID = was charged
-    ).exists()  # Check THIS delivery AND any other delivery
+    # First check: Does THIS delivery already have payment_authorization_id?
+    if delivery.payment_authorization_id:
+        logger.info(f"🛡️ PROTECTION: Delivery {delivery_id} already has payment ID {delivery.payment_authorization_id} - NOT charging again")
+        should_charge = False
+    else:
+        # Second check: Was any OTHER delivery this week already charged?
+        other_charged_deliveries = WeeklyDelivery.objects.filter(
+            subscription=subscription,
+            delivery_date__gte=week_start,
+            delivery_date__lte=week_end,
+            payment_authorization_id__isnull=False
+        ).exclude(id=delivery.id)
 
-    should_charge = not already_charged_this_week
+        if other_charged_deliveries.exists():
+            other_delivery = other_charged_deliveries.first()
+            logger.info(f"🛡️ PROTECTION: Another delivery ({other_delivery.id}) already charged this week - NOT charging again")
+            should_charge = False
+        else:
+            logger.info(f"💳 Ready to charge: No payment found for this delivery or week")
+            should_charge = True
+
     subscription_amount = 30.00 if subscription.subscription_tier == 'premium' else 15.00
 
     if should_charge:
@@ -5310,16 +5323,17 @@ def assign_delivery_api(request):
 
         logger.info(f"✅ Subscription fee ${subscription_amount} charged for delivery {delivery_id}")
 
-        # Store payment ID to prevent duplicate charges
+        # Store payment ID to prevent duplicate charges (will be saved with delivery assignment below)
         delivery.payment_authorization_id = charge_id
-        delivery.save()
     else:
         logger.info(f"ℹ️ Subscription already charged this week, skipping charge for delivery {delivery_id}")
 
-    # Payment successful! Now assign delivery
+    # Assign delivery and save everything together (including payment_authorization_id if charged)
     delivery.shopper = request.user
     delivery.status = 'assigned'  # Shopper accepted, but hasn't started packing yet
     delivery.save()
+
+    logger.info(f"💾 Saved delivery {delivery_id}: shopper={delivery.shopper.username}, status={delivery.status}, payment_auth_id={delivery.payment_authorization_id or 'None'}")
 
     # RESET: Clear shopper_collected for all items (fresh start for new shopper)
     # This ensures previous delivery's collected state doesn't carry over
