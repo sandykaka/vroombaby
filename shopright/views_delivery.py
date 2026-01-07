@@ -2443,15 +2443,15 @@ def shopper_release_delivery(request):
         if delivery.shopper != request.user:
             return JsonResponse({'error': 'You are not assigned to this delivery'}, status=403)
 
-        # Only allow release when status is 'assigned' (before packing)
-        if delivery.status != 'assigned':
+        # Only allow release when status is 'assigned' or 'scheduled' (before packing)
+        # Note: 'scheduled' + shopper assigned is a data inconsistency edge case we handle gracefully
+        if delivery.status not in ['assigned', 'scheduled']:
             status_messages = {
                 'packing': 'Cannot release - you have already started shopping. Please complete or contact admin.',
                 'ready': 'Cannot release - order is ready for delivery. Please complete or contact admin.',
                 'out_for_delivery': 'Cannot release - you are currently delivering. Please complete the delivery.',
                 'delivered': 'This delivery has already been completed.',
-                'cancelled': 'This delivery has been cancelled.',
-                'scheduled': 'This delivery is not assigned to you.'
+                'cancelled': 'This delivery has been cancelled.'
             }
             return JsonResponse({
                 'error': status_messages.get(delivery.status, 'Cannot release delivery in current status')
