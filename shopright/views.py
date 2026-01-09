@@ -1633,12 +1633,12 @@ def submit_delivery_rating_api(request):
 
     # Get delivery and verify ownership
     try:
-        delivery = WeeklyDelivery.objects.select_related('customer', 'shopper').get(id=delivery_id)
+        delivery = WeeklyDelivery.objects.select_related('subscription__customer', 'shopper').get(id=delivery_id)
     except WeeklyDelivery.DoesNotExist:
         return JsonResponse({'error': 'Delivery not found'}, status=404)
 
     # Verify this delivery belongs to the requesting customer
-    if delivery.customer != request.user:
+    if delivery.subscription.customer != request.user:
         return JsonResponse({'error': 'You can only rate your own deliveries'}, status=403)
 
     # Check delivery is completed
