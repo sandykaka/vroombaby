@@ -357,12 +357,11 @@ class UserSubscriptionAdmin(admin.ModelAdmin):
 
 @admin.register(WeeklyDelivery)
 class WeeklyDeliveryAdmin(admin.ModelAdmin):
-    list_display = ('id', 'delivery_date', 'customer_name', 'shopper_name', 'status', 'store_name', 'created_at')
-    list_filter = ('status', 'delivery_date', 'created_at')
+    list_display = ('id', 'delivery_date', 'customer_name', 'shopper_name', 'status', 'store_name', 'rating_display', 'has_feedback', 'created_at')
     search_fields = ('subscription__customer__username', 'shopper__username')
-    readonly_fields = ('created_at', 'updated_at', 'packing_started_at', 'packing_completed_at', 'picked_up_at', 'delivered_at')
+    readonly_fields = ('created_at', 'updated_at', 'packing_started_at', 'packing_completed_at', 'picked_up_at', 'delivered_at', 'shopper_avg_rating')
 
-    actions = ['reset_to_scheduled', 'mark_as_delivered']
+    actions = ['reset_to_scheduled', 'mark_as_delivered', 'show_shopper_stats']
 
     fieldsets = (
         ('Delivery Info', {
@@ -396,6 +395,64 @@ class WeeklyDeliveryAdmin(admin.ModelAdmin):
     def store_name(self, obj):
         return obj.subscription.store.name if obj.subscription and obj.subscription.store else 'No store'
     store_name.short_description = 'Store'
+
+    def rating_display(self, obj):
+        """Show rating as stars or 'Not rated'"""
+        if obj.customer_rating:
+            stars = '⭐' * obj.customer_rating
+            return f'{stars} ({obj.customer_rating}/5)'
+        return '—'
+    rating_display.short_description = 'Rating'
+
+    def has_feedback(self, obj):
+        """Show if customer left text feedback"""
+        return bool(obj.customer_feedback and obj.customer_feedback.strip())
+    has_feedback.boolean = True
+    has_feedback.short_description = 'Feedback?'
+
+    def shopper_avg_rating(self, obj):
+        """Show average rating for this delivery's shopper (read-only field in detail view)"""
+        if not obj.shopper:
+            return 'No shopper assigned'
+
+        from django.db.models import Avg
+        avg_rating = WeeklyDelivery.objects.filter(
+            shopper=obj.shopper,
+            customer_rating__isnull=False
+        ).aggregate(Avg('customer_rating'))['customer_rating__avg']
+
+        if avg_rating:
+            return f'{avg_rating:.2f} stars ({WeeklyDelivery.objects.filter(shopper=obj.shopper, customer_rating__isnull=False).count()} ratings)'
+        return 'No ratings yet'
+    shopper_avg_rating.short_description = 'Shopper Avg Rating'
+
+    # Custom list filter for ratings
+    class RatingFilter(admin.SimpleListFilter):
+        title = 'Rating Status'
+        parameter_name = 'rating_status'
+
+        def lookups(self, request, model_admin):
+            return (
+                ('rated', 'Has Rating'),
+                ('unrated', 'No Rating'),
+                ('5_star', '5 Stars'),
+                ('4_star', '4 Stars'),
+                ('3_star', '3 Stars or Below'),
+            )
+
+        def queryset(self, request, queryset):
+            if self.value() == 'rated':
+                return queryset.filter(customer_rating__isnull=False)
+            if self.value() == 'unrated':
+                return queryset.filter(customer_rating__isnull=True)
+            if self.value() == '5_star':
+                return queryset.filter(customer_rating=5)
+            if self.value() == '4_star':
+                return queryset.filter(customer_rating=4)
+            if self.value() == '3_star':
+                return queryset.filter(customer_rating__lte=3)
+
+    list_filter = ('status', 'delivery_date', 'created_at', RatingFilter)
 
     def reset_to_scheduled(self, request, queryset):
         """Reset deliveries to scheduled status (unassign from shopper) and notify other shoppers"""

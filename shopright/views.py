@@ -1487,6 +1487,20 @@ def trip_detail_api(request, trip_id):
                 enriched_item['image_url'] = None
             enriched_items.append(enriched_item)
 
+        # Include delivery info if this receipt is from a delivery service
+        delivery_info = None
+        if trip.delivery:  # ShoppingTrip has FK to WeeklyDelivery
+            delivery = trip.delivery
+            delivery_info = {
+                'id': delivery.id,
+                'shopper_name': delivery.shopper.username if delivery.shopper else None,
+                'shopper_first_name': delivery.shopper.first_name if delivery.shopper else None,
+                'delivery_date': delivery.delivery_date.isoformat() if delivery.delivery_date else None,
+                'status': delivery.status,
+                'customer_rating': delivery.customer_rating,
+                'customer_feedback': delivery.customer_feedback or ''
+            }
+
         return JsonResponse({
             'trip': {
                 'id': trip.id,
@@ -1496,7 +1510,8 @@ def trip_detail_api(request, trip_id):
                 'items': enriched_items,
                 'total_amount': str(trip.total_amount) if trip.total_amount else None,
                 'shopped_by': trip.user.username,
-                'receipt_image_url': request.build_absolute_uri(trip.receipt_image.url) if trip.receipt_image else None
+                'receipt_image_url': request.build_absolute_uri(trip.receipt_image.url) if trip.receipt_image else None,
+                'delivery': delivery_info  # NEW: Include delivery info for rating
             }
         })
 
@@ -1538,6 +1553,20 @@ def trip_detail_api(request, trip_id):
 
         logger.info(f"✅ Updated trip {trip_id}: store={trip.store_name}, items={len(trip.items)}")
 
+        # Include delivery info if this receipt is from a delivery service
+        delivery_info = None
+        if trip.delivery:  # ShoppingTrip has FK to WeeklyDelivery
+            delivery = trip.delivery
+            delivery_info = {
+                'id': delivery.id,
+                'shopper_name': delivery.shopper.username if delivery.shopper else None,
+                'shopper_first_name': delivery.shopper.first_name if delivery.shopper else None,
+                'delivery_date': delivery.delivery_date.isoformat() if delivery.delivery_date else None,
+                'status': delivery.status,
+                'customer_rating': delivery.customer_rating,
+                'customer_feedback': delivery.customer_feedback or ''
+            }
+
         return JsonResponse({
             'trip': {
                 'id': trip.id,
@@ -1547,12 +1576,100 @@ def trip_detail_api(request, trip_id):
                 'items': trip.items,
                 'total_amount': str(trip.total_amount) if trip.total_amount else None,
                 'shopped_by': trip.user.username,
-                'receipt_image_url': request.build_absolute_uri(trip.receipt_image.url) if trip.receipt_image else None
+                'receipt_image_url': request.build_absolute_uri(trip.receipt_image.url) if trip.receipt_image else None,
+                'delivery': delivery_info  # NEW: Include delivery info for rating
             }
         })
 
     else:
         return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+@require_firebase_auth
+def submit_delivery_rating_api(request):
+    """
+    Submit or update rating and feedback for a completed delivery
+
+    POST /shopright/api/deliveries/rate/
+    Body: {
+        "delivery_id": 123,
+        "rating": 4,  # 1-5 stars (required)
+        "feedback": "Bananas were too ripe"  # Optional text feedback
+    }
+
+    Returns: {
+        "message": "Rating submitted successfully",
+        "rating": 4,
+        "feedback": "Bananas were too ripe"
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    # Validate required fields
+    delivery_id = data.get('delivery_id')
+    rating = data.get('rating')
+    feedback = data.get('feedback', '').strip()
+
+    if not delivery_id:
+        return JsonResponse({'error': 'delivery_id is required'}, status=400)
+
+    if not rating:
+        return JsonResponse({'error': 'rating is required'}, status=400)
+
+    # Validate rating is 1-5
+    try:
+        rating = int(rating)
+        if rating < 1 or rating > 5:
+            return JsonResponse({'error': 'rating must be between 1 and 5'}, status=400)
+    except (ValueError, TypeError):
+        return JsonResponse({'error': 'rating must be a number between 1 and 5'}, status=400)
+
+    # Get delivery and verify ownership
+    try:
+        delivery = WeeklyDelivery.objects.select_related('customer', 'shopper').get(id=delivery_id)
+    except WeeklyDelivery.DoesNotExist:
+        return JsonResponse({'error': 'Delivery not found'}, status=404)
+
+    # Verify this delivery belongs to the requesting customer
+    if delivery.customer != request.user:
+        return JsonResponse({'error': 'You can only rate your own deliveries'}, status=403)
+
+    # Check delivery is completed
+    if delivery.status != 'delivered':
+        return JsonResponse({
+            'error': f'Can only rate completed deliveries. This delivery is {delivery.status}.'
+        }, status=400)
+
+    # Check if rating is being submitted within reasonable timeframe (30 days)
+    from datetime import timedelta
+    if delivery.delivery_date:
+        days_since_delivery = (timezone.now().date() - delivery.delivery_date).days
+        if days_since_delivery > 30:
+            return JsonResponse({
+                'error': 'Ratings can only be submitted within 30 days of delivery'
+            }, status=400)
+
+    # Save rating and feedback (allow updates)
+    delivery.customer_rating = rating
+    delivery.customer_feedback = feedback
+    delivery.save()
+
+    logger.info(f"✅ Customer {request.user.username} rated delivery {delivery_id}: {rating} stars")
+    if feedback:
+        logger.info(f"   Feedback: {feedback[:100]}...")
+
+    return JsonResponse({
+        'message': 'Rating submitted successfully',
+        'rating': rating,
+        'feedback': feedback
+    })
 
 
 # ========================================
