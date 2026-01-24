@@ -11,14 +11,14 @@ class Migration(migrations.Migration):
 
     operations = [
         # Remove old unique constraints
-        migrations.RemoveConstraint(
-            model_name='shoppinglist',
-            name='unique_family_store',
-        ),
-        migrations.RemoveConstraint(
-            model_name='shoppinglist',
-            name='unique_user_store',
-        ),
+        #migrations.RemoveConstraint(
+        #    model_name='shoppinglist',
+         #   name='unique_family_store',
+        #),
+        #migrations.RemoveConstraint(
+         #   model_name='shoppinglist',
+         #   name='unique_user_store',
+        #),
         # Add store_location field
         migrations.AddField(
             model_name='shoppinglist',
