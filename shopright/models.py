@@ -654,6 +654,24 @@ class UserProfile(models.Model):
     )
     shopper_approved_at = models.DateTimeField(null=True, blank=True)
 
+    # Free trial tracking (fraud prevention)
+    phone_number = models.CharField(
+        max_length=20,
+        blank=True,
+        db_index=True,
+        help_text="User's phone number (for trial fraud prevention)"
+    )
+    has_used_free_trial = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Has this user already used their 15-day free trial?"
+    )
+    free_trial_used_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When user activated their free trial"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

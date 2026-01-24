@@ -91,15 +91,17 @@ class StripeService:
     def create_subscription(
         customer_id: str,
         price_id: str,
-        metadata: dict
+        metadata: dict,
+        trial_period_days: Optional[int] = None
     ) -> Tuple[bool, Optional[str], Optional[str]]:
         """
-        Create a Stripe subscription
+        Create a Stripe subscription with optional trial period
 
         Args:
             customer_id: Stripe customer ID
             price_id: Stripe price ID (STRIPE_PRICE_BASIC or STRIPE_PRICE_PREMIUM)
             metadata: Dict with subscription metadata (delivery_subscription_id, store_name, etc.)
+            trial_period_days: Optional number of days for free trial (e.g., 15 for new users)
 
         Returns:
             Tuple of (success: bool, subscription_id: str or None, error_message: str or None)
@@ -108,12 +110,19 @@ class StripeService:
                 (False, None, "Stripe API error: ...")
         """
         try:
-            subscription = stripe.Subscription.create(
-                customer=customer_id,
-                items=[{'price': price_id}],
-                metadata=metadata,
-                proration_behavior='none'  # No prorating for weekly subscriptions
-            )
+            subscription_params = {
+                'customer': customer_id,
+                'items': [{'price': price_id}],
+                'metadata': metadata,
+                'proration_behavior': 'none'  # No prorating for weekly subscriptions
+            }
+
+            # Add trial period if specified
+            if trial_period_days:
+                subscription_params['trial_period_days'] = trial_period_days
+                logger.info(f"🎁 Creating subscription with {trial_period_days}-day free trial")
+
+            subscription = stripe.Subscription.create(**subscription_params)
 
             logger.info(f"✅ Created Stripe subscription {subscription.id} for customer {customer_id}")
             return (True, subscription.id, None)
@@ -267,6 +276,48 @@ class StripeService:
             return (False, str(e))
         except Exception as e:
             logger.error(f"Unexpected error resuming Stripe subscription: {e}")
+            return (False, str(e))
+
+    @staticmethod
+    def end_trial_immediately(subscription_id: str) -> Tuple[bool, Optional[str]]:
+        """
+        End trial period immediately and start billing
+
+        Used when user's first delivery is completed during trial period.
+        This prevents users from getting multiple free deliveries.
+
+        Args:
+            subscription_id: Stripe subscription ID
+
+        Returns:
+            Tuple of (success: bool, error_message: str or None)
+            Examples:
+                (True, None)  # Trial ended, billing started
+                (False, "Subscription not in trial")
+        """
+        try:
+            # Retrieve subscription to check if it's in trial
+            subscription = stripe.Subscription.retrieve(subscription_id)
+
+            # Check if subscription is currently in trial
+            if subscription.status != 'trialing':
+                logger.info(f"⚠️ Subscription {subscription_id} is not in trial (status: {subscription.status}), skipping trial end")
+                return (True, None)  # Not an error, just already past trial
+
+            # End trial immediately by setting trial_end to 'now'
+            stripe.Subscription.modify(
+                subscription_id,
+                trial_end='now'  # This immediately ends trial and starts billing
+            )
+
+            logger.info(f"✅ Ended trial for subscription {subscription_id}, billing started")
+            return (True, None)
+
+        except stripe.error.StripeError as e:
+            logger.error(f"Stripe API error ending trial: {e}")
+            return (False, str(e))
+        except Exception as e:
+            logger.error(f"Unexpected error ending trial: {e}")
             return (False, str(e))
 
     @staticmethod

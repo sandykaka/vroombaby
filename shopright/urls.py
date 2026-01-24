@@ -88,6 +88,7 @@ urlpatterns = [
     path('api/delivery/subscribe/', views_delivery.subscribe_delivery, name='subscribe_delivery'),
     path('api/delivery/my-subscriptions/', views_delivery.my_subscriptions, name='my_subscriptions'),
     path('api/delivery/billing-history/', views_delivery.billing_history, name='billing_history'),
+    path('api/delivery/check-trial-eligibility/', views_delivery.check_trial_eligibility, name='check_trial_eligibility'),
     path('api/delivery/delivery-history/', views_delivery.delivery_history, name='delivery_history'),
     path('api/deliveries/rate/', views.submit_delivery_rating_api, name='submit_delivery_rating'),
     path('api/delivery/cancel/', views_delivery.cancel_subscription, name='cancel_subscription'),

@@ -927,6 +927,43 @@ def subscribe_delivery(request):
                     'action': 'collect_payment_method'
                 }, status=400)
 
+            # STEP 1.6: Check trial eligibility (Basic tier only)
+            trial_days = None
+            if tier == 'basic':
+                user_profile, _ = UserProfile.objects.get_or_create(user=user)
+
+                # Check if user has already used free trial
+                if user_profile.has_used_free_trial:
+                    logger.info(f"User {user.username} has already used free trial")
+                    eligible_for_trial = False
+                else:
+                    # Check if phone number has already used trial
+                    if user_profile.phone_number:
+                        phone_already_used_trial = UserProfile.objects.filter(
+                            phone_number=user_profile.phone_number,
+                            has_used_free_trial=True
+                        ).exists()
+
+                        if phone_already_used_trial:
+                            logger.info(f"Phone number {user_profile.phone_number} has already used free trial")
+                            eligible_for_trial = False
+                        else:
+                            eligible_for_trial = True
+                    else:
+                        # No phone number on file, assume eligible
+                        eligible_for_trial = True
+
+                # Set trial days if eligible
+                if eligible_for_trial:
+                    trial_days = 15
+                    # Mark trial as used
+                    user_profile.has_used_free_trial = True
+                    user_profile.free_trial_used_at = timezone.now()
+                    user_profile.save()
+                    logger.info(f"🎁 User {user.username} eligible for 15-day free trial")
+                else:
+                    logger.info(f"User {user.username} not eligible for free trial (already used)")
+
             # STEP 2: Get Stripe price ID for tier
             stripe_price_id = StripeService.get_price_id_for_tier(tier)
             if not stripe_price_id:
@@ -940,12 +977,14 @@ def subscribe_delivery(request):
             success, stripe_subscription_id, error = StripeService.create_subscription(
                 customer_id=stripe_customer_id,
                 price_id=stripe_price_id,
+                trial_period_days=trial_days,  # Pass trial period (15 days for eligible Basic users, None otherwise)
                 metadata={
                     'user_id': user.id,
                     'username': user.username,
                     'tier': tier,
                     'delivery_count': len(validated_deliveries),
-                    'store_name': first_list.store_name
+                    'store_name': first_list.store_name,
+                    'has_trial': trial_days is not None
                 }
             )
 
@@ -1529,6 +1568,60 @@ def billing_history(request):
 
     except Exception as e:
         logger.error(f"Billing history error: {e}", exc_info=True)
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_firebase_auth
+@require_account_type('customer')
+@require_http_methods(["GET"])
+def check_trial_eligibility(request):
+    """
+    Check if user is eligible for 15-day free trial
+
+    GET /api/delivery/check-trial-eligibility/
+
+    Returns: {
+        "is_eligible": true/false,
+        "reason": "new_user" | "already_used" | "phone_already_used",
+        "message": "Friendly message for user"
+    }
+    """
+    try:
+        user = request.user
+        user_profile, _ = UserProfile.objects.get_or_create(user=user)
+
+        # Check if user already used trial
+        if user_profile.has_used_free_trial:
+            return JsonResponse({
+                'is_eligible': False,
+                'reason': 'already_used',
+                'message': 'You have already used your free trial'
+            })
+
+        # Check if phone number already used trial
+        if user_profile.phone_number:
+            phone_already_used = UserProfile.objects.filter(
+                phone_number=user_profile.phone_number,
+                has_used_free_trial=True
+            ).exists()
+
+            if phone_already_used:
+                return JsonResponse({
+                    'is_eligible': False,
+                    'reason': 'phone_already_used',
+                    'message': 'This phone number has already been used for a free trial'
+                })
+
+        # User is eligible!
+        return JsonResponse({
+            'is_eligible': True,
+            'reason': 'new_user',
+            'message': 'Get 15 days free with Basic delivery'
+        })
+
+    except Exception as e:
+        logger.error(f"Trial eligibility check error: {e}", exc_info=True)
         return JsonResponse({'error': str(e)}, status=500)
 
 
@@ -2276,6 +2369,23 @@ def mark_delivered(request):
         delivery.status = 'delivered'
         delivery.delivered_at = timezone.now()
         delivery.save()
+
+        # End free trial if this is user's first delivery during trial period
+        subscription = delivery.subscription
+        if subscription.stripe_subscription_id:
+            # Check if this is the first completed delivery for this subscription
+            completed_deliveries_count = WeeklyDelivery.objects.filter(
+                subscription=subscription,
+                status='delivered'
+            ).count()
+
+            if completed_deliveries_count == 1:
+                # This is the first delivery - end trial to prevent multiple free deliveries
+                success, error = StripeService.end_trial_immediately(subscription.stripe_subscription_id)
+                if success:
+                    logger.info(f"🎁 Ended trial for subscription {subscription.stripe_subscription_id} after first delivery")
+                else:
+                    logger.error(f"Failed to end trial for subscription {subscription.stripe_subscription_id}: {error}")
 
         # Update shopper stats
         shopper = delivery.shopper
