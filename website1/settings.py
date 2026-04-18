@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'business',
     'vroombaby',
     'shopright',  # New grocery shopping assistant app
+    'shillak',  # Family finance autopilot app
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -247,6 +248,11 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False,
         },
+        'shillak': {
+            'handlers': ['console', 'file_debug'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
     },
     'root': {
         'handlers': ['console'],
@@ -272,6 +278,11 @@ SHOPRIGHT_BUNDLE_ID = 'bleedblue.ShopRight'
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')  # sk_test_... or sk_live_...
 STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY', '')  # pk_test_... or pk_live_...
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')  # whsec_...
+
+# Plaid API (Shillak - bank account linking)
+PLAID_CLIENT_ID = os.getenv('PLAID_CLIENT_ID', '')
+PLAID_SECRET = os.getenv('PLAID_SECRET', '')
+PLAID_ENV = os.getenv('PLAID_ENV', 'sandbox')  # sandbox, development, or production
 
 # Stripe Price IDs for delivery subscriptions
 # Create these in Stripe Dashboard → Products
