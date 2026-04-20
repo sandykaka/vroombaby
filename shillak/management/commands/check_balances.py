@@ -1,8 +1,14 @@
 """
 Management command to check bank account balances and send low balance alerts.
 
+Logic:
+- Fetch fresh balances from Plaid for all linked accounts
+- If balance < threshold AND we haven't already alerted → send notification
+- If balance goes BACK ABOVE threshold → reset the alert (so we notify again if it drops)
+- Only notify once per drop below threshold, not every cron run
+
 Usage:
-    # Run balance check (every 4 hours via cron)
+    # Run balance check (3x/day during business hours via cron)
     python manage.py check_balances
 
     # Dry run (check but don't notify)
@@ -10,6 +16,7 @@ Usage:
 """
 
 import logging
+from decimal import Decimal
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
@@ -44,15 +51,19 @@ class Command(BaseCommand):
             threshold = home.low_balance_threshold
             plaid_items = PlaidItem.objects.filter(home=home)
 
-            # Get all home members for notifications
-            members = [m.user for m in HomeMember.objects.filter(home=home).select_related('user')]
+            members = [
+                m.user for m in
+                HomeMember.objects.filter(home=home).select_related('user')
+            ]
 
             for item in plaid_items:
                 try:
-                    plaid_accounts = plaid_service.get_account_balances(item.access_token)
+                    plaid_accounts = plaid_service.get_account_balances(
+                        item.access_token
+                    )
 
                     for acct_data in plaid_accounts:
-                        balance = acct_data['balance_current']
+                        balance = Decimal(str(acct_data['balance_current']))
 
                         # Update balance in DB
                         updated = BankAccount.objects.filter(
@@ -64,44 +75,58 @@ class Command(BaseCommand):
                         )
                         total_refreshed += updated
 
-                        # Check if below threshold
-                        if balance < float(threshold):
-                            account = BankAccount.objects.filter(
-                                plaid_account_id=acct_data['plaid_account_id']
-                            ).first()
+                        account = BankAccount.objects.filter(
+                            plaid_account_id=acct_data['plaid_account_id']
+                        ).first()
 
-                            if not account:
-                                continue
+                        if not account:
+                            continue
 
-                            # Dedup: skip if we already alerted for this exact balance
-                            if account.last_alert_balance is not None and float(account.last_alert_balance) == balance:
-                                self.stdout.write(
-                                    f"  Skip (already alerted): {account.account_name} "
-                                    f"${balance:,.2f}"
-                                )
-                                continue
-
-                            self.stdout.write(
-                                self.style.WARNING(
-                                    f"  LOW: {account.account_name} at "
-                                    f"${balance:,.2f} (threshold ${threshold:,.2f})"
-                                )
-                            )
-
-                            if not dry_run:
-                                NotificationService.send_low_balance_alert(
-                                    account=account,
-                                    home=home,
-                                    recipients=members,
-                                )
-                                account.last_alert_balance = balance
+                        if balance >= threshold:
+                            # Balance is healthy — reset alert so we notify
+                            # again if it drops below threshold later
+                            if account.last_alert_balance is not None:
+                                account.last_alert_balance = None
                                 account.save(update_fields=['last_alert_balance'])
+                                self.stdout.write(
+                                    f"  Reset: {account.account_name} "
+                                    f"back above threshold (${balance:,.2f})"
+                                )
+                            continue
 
-                            total_alerts += 1
+                        # Balance is below threshold
+                        if account.last_alert_balance is not None:
+                            # Already alerted for this drop — skip
+                            self.stdout.write(
+                                f"  Skip (already alerted): "
+                                f"{account.account_name} ${balance:,.2f}"
+                            )
+                            continue
+
+                        # New drop below threshold — send alert
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f"  LOW: {account.account_name} at "
+                                f"${balance:,.2f} (threshold ${threshold:,.2f})"
+                            )
+                        )
+
+                        if not dry_run:
+                            NotificationService.send_low_balance_alert(
+                                account=account,
+                                home=home,
+                                recipients=members,
+                            )
+                            account.last_alert_balance = balance
+                            account.save(update_fields=['last_alert_balance'])
+
+                        total_alerts += 1
 
                 except Exception as e:
                     logger.error(f"Failed to check item {item.item_id}: {e}")
-                    self.stderr.write(f"Error checking {item.institution_name}: {e}")
+                    self.stderr.write(
+                        f"Error checking {item.institution_name}: {e}"
+                    )
 
         prefix = "[DRY RUN] " if dry_run else ""
         self.stdout.write(
