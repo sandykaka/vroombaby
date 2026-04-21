@@ -2,6 +2,7 @@ import json
 import logging
 
 from django.http import JsonResponse
+from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
@@ -761,3 +762,15 @@ def cancel_transfer_api(request, transfer_id):
     transfer.save(update_fields=['status', 'updated_at'])
 
     return JsonResponse({'transfer': _serialize_transfer(transfer)})
+
+
+# ========================================
+# STATIC PAGES
+# ========================================
+
+def privacy_policy(request):
+    return render(request, 'shillak/privacy.html')
+
+
+def support(request):
+    return render(request, 'shillak/support.html')

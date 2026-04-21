@@ -33,4 +33,8 @@ urlpatterns = [
     path('api/transfer/history/', views.transfer_history_api, name='transfer_history'),
     path('api/transfer/<int:transfer_id>/complete/', views.complete_transfer_api, name='complete_transfer'),
     path('api/transfer/<int:transfer_id>/cancel/', views.cancel_transfer_api, name='cancel_transfer'),
+
+    # Static pages
+    path('privacy/', views.privacy_policy, name='privacy_policy'),
+    path('support/', views.support, name='support'),
 ]

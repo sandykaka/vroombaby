@@ -51,5 +51,19 @@ if shopright_service_account_path:
 else:
     print("Warning: ShopRight Firebase service account not found. ShopRight authentication will not work.")
 
+# Initialize Firebase Admin for Shillak (secondary app)
+shillak_service_account_path = None
+if os.path.exists('/Users/sandeshkakade/gitRepos/vroombaby/shillak_service_account_key.json'):
+    shillak_service_account_path = '/Users/sandeshkakade/gitRepos/vroombaby/shillak_service_account_key.json'
+elif os.path.exists('/home/ubuntu/vroombaby/shillak_service_account_key.json'):
+    shillak_service_account_path = '/home/ubuntu/vroombaby/shillak_service_account_key.json'
+
+if shillak_service_account_path:
+    print(f"Using Shillak Firebase service account: {shillak_service_account_path}")
+    shillak_cred = credentials.Certificate(shillak_service_account_path)
+    firebase_admin.initialize_app(shillak_cred, name='shillak')
+else:
+    print("Warning: Shillak Firebase service account not found. Shillak authentication will not work.")
+
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'website1.settings')
 application = get_wsgi_application()
