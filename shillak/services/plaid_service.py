@@ -1,4 +1,5 @@
 import logging
+from datetime import date, timedelta
 
 import plaid
 from plaid.api import plaid_api
@@ -10,6 +11,8 @@ from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchan
 from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest
 from plaid.model.item_remove_request import ItemRemoveRequest
+from plaid.model.transactions_get_request import TransactionsGetRequest
+from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
 
 from django.conf import settings
 
@@ -52,7 +55,7 @@ def create_link_token(user_id):
         client_name='Shillak',
         language='en',
         country_codes=[CountryCode('US')],
-        products=[Products('auth')],
+        products=[Products('auth'), Products('transactions')],
     )
 
     response = client.link_token_create(request)
@@ -123,3 +126,65 @@ def remove_item(access_token):
         logger.info("Plaid item removed")
     except Exception as e:
         logger.warning(f"Could not remove Plaid item: {e}")
+
+
+def get_transactions(access_token, months=6):
+    """Fetch transaction history from Plaid.
+
+    Args:
+        access_token: Plaid access token for the linked institution.
+        months: Number of months of history to fetch (default 6).
+
+    Returns:
+        List of transaction dicts with raw + categorized data.
+    """
+    client = get_plaid_client()
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=months * 30)
+
+    all_transactions = []
+    offset = 0
+    page_size = 100
+
+    while True:
+        request = TransactionsGetRequest(
+            access_token=access_token,
+            start_date=start_date,
+            end_date=end_date,
+            options=TransactionsGetRequestOptions(
+                count=page_size,
+                offset=offset,
+            ),
+        )
+
+        response = client.transactions_get(request)
+
+        for txn in response.transactions:
+            # Get personal finance category if available
+            pfc = None
+            if hasattr(txn, 'personal_finance_category') and txn.personal_finance_category:
+                pfc = txn.personal_finance_category.primary
+
+            all_transactions.append({
+                'transaction_id': txn.transaction_id,
+                'account_id': txn.account_id,
+                'date': str(txn.date),
+                'amount': float(txn.amount),
+                'name': txn.name,
+                'merchant_name': txn.merchant_name,
+                'category': txn.category,
+                'personal_finance_category': pfc,
+                'pending': txn.pending,
+                'payment_channel': txn.payment_channel,
+                'iso_currency_code': txn.iso_currency_code,
+            })
+
+        total = response.total_transactions
+        offset += page_size
+
+        if offset >= total:
+            break
+
+    logger.info(f"Fetched {len(all_transactions)} transactions ({months} months)")
+    return all_transactions

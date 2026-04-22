@@ -34,6 +34,11 @@ urlpatterns = [
     path('api/transfer/<int:transfer_id>/complete/', views.complete_transfer_api, name='complete_transfer'),
     path('api/transfer/<int:transfer_id>/cancel/', views.cancel_transfer_api, name='cancel_transfer'),
 
+    # Cash flow
+    path('api/cashflow/predictions/', views.cashflow_predictions_api, name='cashflow_predictions'),
+    path('api/cashflow/analyze/', views.analyze_cashflow_api, name='analyze_cashflow'),
+    path('api/transactions/', views.transactions_api, name='transactions'),
+
     # Static pages
     path('privacy/', views.privacy_policy, name='privacy_policy'),
     path('support/', views.support, name='support'),

@@ -7,9 +7,10 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
 from .decorators import require_firebase_auth
-from .models import BankAccount, Home, HomeMember, PlaidItem, TransferRequest, UserProfile
+from .models import BankAccount, CashFlowPrediction, Home, HomeMember, PlaidItem, Transaction, TransferRequest, UserProfile
 from .services import plaid_service
 from .services.notification_service import NotificationService
+from .services import cashflow_service
 
 logger = logging.getLogger(__name__)
 
@@ -766,6 +767,106 @@ def cancel_transfer_api(request, transfer_id):
 
 # ========================================
 # STATIC PAGES
+# ========================================
+
+
+# ========================================
+# CASH FLOW PREDICTIONS
+# ========================================
+
+@require_firebase_auth
+def cashflow_predictions_api(request):
+    """Get current cash flow predictions for the user's home."""
+    membership = HomeMember.objects.filter(user=request.user).first()
+    if not membership:
+        return JsonResponse({'predictions': []})
+
+    predictions = CashFlowPrediction.objects.filter(home=membership.home)
+
+    return JsonResponse({
+        'predictions': [
+            {
+                'id': p.id,
+                'week_start': str(p.week_start),
+                'week_end': str(p.week_end),
+                'predicted_spend': str(p.predicted_spend),
+                'predicted_income': str(p.predicted_income),
+                'estimated_end_balance': str(p.estimated_end_balance),
+                'risk_level': p.risk_level,
+                'bills_due': p.bills_due,
+                'alerts': p.alerts,
+                'monthly_summary': p.monthly_summary,
+                'recurring_bills': p.recurring_bills,
+                'income_patterns': p.income_patterns,
+            }
+            for p in predictions
+        ]
+    })
+
+
+@csrf_exempt
+@require_firebase_auth
+def analyze_cashflow_api(request):
+    """Trigger on-demand cash flow analysis."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    membership = HomeMember.objects.filter(user=request.user).first()
+    if not membership:
+        return JsonResponse({'error': 'Not in a home'}, status=400)
+
+    home = membership.home
+
+    # Sync transactions first
+    plaid_items = PlaidItem.objects.filter(home=home)
+    for item in plaid_items:
+        try:
+            cashflow_service.sync_transactions(item)
+        except Exception as e:
+            logger.error(f"Failed to sync transactions for {item.institution_name}: {e}")
+
+    # Run analysis
+    try:
+        analysis = cashflow_service.analyze_cashflow(home)
+        if analysis:
+            return JsonResponse({'status': 'analyzed', 'analysis': analysis})
+        else:
+            return JsonResponse({'error': 'No transactions to analyze'}, status=400)
+    except Exception as e:
+        logger.error(f"Cash flow analysis failed: {e}")
+        return JsonResponse({'error': 'Analysis failed'}, status=500)
+
+
+@require_firebase_auth
+def transactions_api(request):
+    """Get recent transactions for the user's home."""
+    membership = HomeMember.objects.filter(user=request.user).first()
+    if not membership:
+        return JsonResponse({'transactions': []})
+
+    transactions = Transaction.objects.filter(
+        home=membership.home
+    ).order_by('-date')[:100]
+
+    return JsonResponse({
+        'transactions': [
+            {
+                'id': t.id,
+                'date': str(t.date),
+                'amount': str(t.amount),
+                'name': t.name,
+                'merchant_name': t.merchant_name,
+                'category': t.category,
+                'personal_finance_category': t.personal_finance_category,
+                'pending': t.pending,
+            }
+            for t in transactions
+        ]
+    })
+
+
+# ========================================
+# STATIC PAGES (keep at bottom)
 # ========================================
 
 def privacy_policy(request):

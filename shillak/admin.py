@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import BankAccount, Home, HomeMember, PlaidItem, TransferRequest, UserProfile
+from .models import BankAccount, CashFlowPrediction, Home, HomeMember, PlaidItem, Transaction, TransferRequest, UserProfile
 
 
 @admin.register(UserProfile)
@@ -43,3 +43,18 @@ class TransferRequestAdmin(admin.ModelAdmin):
     list_display = ('from_user', 'to_user', 'method', 'amount', 'status', 'created_at')
     list_filter = ('status', 'method')
     search_fields = ('from_user__username', 'to_user__username')
+
+
+@admin.register(Transaction)
+class TransactionAdmin(admin.ModelAdmin):
+    list_display = ('date', 'name', 'amount', 'merchant_name', 'user')
+    list_filter = ('date', 'personal_finance_category')
+    search_fields = ('name', 'merchant_name')
+    ordering = ('-date',)
+
+
+@admin.register(CashFlowPrediction)
+class CashFlowPredictionAdmin(admin.ModelAdmin):
+    list_display = ('home', 'week_start', 'week_end', 'predicted_spend', 'risk_level', 'created_at')
+    list_filter = ('risk_level',)
+    ordering = ('-created_at',)

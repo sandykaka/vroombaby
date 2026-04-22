@@ -165,3 +165,63 @@ class TransferRequest(models.Model):
 
     def __str__(self):
         return f"{self.from_user.username} → {self.to_user.username} ({self.method}, {self.status})"
+
+
+class Transaction(models.Model):
+    """Cached Plaid transaction for cash flow analysis."""
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='shillak_transactions'
+    )
+    home = models.ForeignKey(
+        Home, on_delete=models.CASCADE, related_name='transactions'
+    )
+    bank_account = models.ForeignKey(
+        BankAccount, on_delete=models.CASCADE, related_name='transactions',
+        null=True, blank=True,
+    )
+    plaid_transaction_id = models.CharField(max_length=255, unique=True, db_index=True)
+    date = models.DateField()
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    name = models.CharField(max_length=255)
+    merchant_name = models.CharField(max_length=255, blank=True, null=True)
+    category = models.JSONField(blank=True, null=True)
+    personal_finance_category = models.CharField(max_length=100, blank=True, null=True)
+    pending = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-date']
+
+    def __str__(self):
+        return f"{self.date} — {self.name} ${self.amount}"
+
+
+class CashFlowPrediction(models.Model):
+    """AI-generated weekly cash flow prediction."""
+    home = models.ForeignKey(
+        Home, on_delete=models.CASCADE, related_name='cashflow_predictions'
+    )
+    week_start = models.DateField()
+    week_end = models.DateField()
+    predicted_spend = models.DecimalField(max_digits=12, decimal_places=2)
+    predicted_income = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    predicted_min_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    estimated_end_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    risk_level = models.CharField(max_length=20, default='low')
+    bills_due = models.JSONField(default=list)
+    recurring_bills = models.JSONField(default=list)
+    income_patterns = models.JSONField(default=list)
+    alerts = models.JSONField(default=list)
+    monthly_summary = models.JSONField(default=dict)
+    ai_analysis = models.TextField(blank=True, default='')
+    alerted = models.BooleanField(default=False)
+    alerted_at_balance = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['week_start']
+
+    def __str__(self):
+        return f"{self.home.name} — {self.week_start} to {self.week_end} (risk: {self.risk_level})"
