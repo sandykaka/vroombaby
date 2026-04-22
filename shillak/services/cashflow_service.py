@@ -83,11 +83,25 @@ def analyze_cashflow(home, dry_run=False):
         })
 
     # Pre-analyze: group expenses and income by merchant
+    import re
     from collections import defaultdict
+
+    def normalize_name(name):
+        """Strip variable parts (dates, IDs, conf numbers) to group recurring transactions."""
+        # Remove date patterns like 03/05, 0305, 04/04
+        cleaned = re.sub(r'\b\d{2}/\d{2}\b', '', name)
+        cleaned = re.sub(r'\b\d{4}\b(?![\d])', '', cleaned)
+        # Remove ID patterns like ID:XXXXXXXXXX12345, Conf# abc123
+        cleaned = re.sub(r'ID:[A-Za-z0-9X]+', 'ID:X', cleaned)
+        cleaned = re.sub(r'Conf#\s*\S+', '', cleaned)
+        # Remove trailing whitespace and truncate
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        return cleaned[:35]
+
     expense_groups = defaultdict(list)
     income_groups = defaultdict(list)
     for t in txn_data:
-        key = t['name'][:40]
+        key = normalize_name(t['name'])
         if t['amount'] > 0:
             expense_groups[key].append({'date': t['date'], 'amount': t['amount']})
         elif t['amount'] < 0:
