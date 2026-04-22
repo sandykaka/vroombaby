@@ -87,16 +87,21 @@ def analyze_cashflow(home, dry_run=False):
     from collections import defaultdict
 
     def normalize_name(name):
-        """Strip variable parts (dates, IDs, conf numbers) to group recurring transactions."""
-        # Remove date patterns like 03/05, 0305, 04/04
-        cleaned = re.sub(r'\b\d{2}/\d{2}\b', '', name)
+        """Strip variable parts to group recurring transactions."""
+        # Use merchant_name if available, otherwise clean the transaction name
+        # Remove everything after DES:, ID:, Conf#, for "
+        cleaned = re.split(r'\bDES:', name)[0]
+        cleaned = re.split(r'\bID:', cleaned)[0]
+        cleaned = re.split(r'\bConf#', cleaned)[0]
+        cleaned = re.split(r'\bfor "', cleaned)[0]
+        # Remove date patterns like 03/05, 0305
+        cleaned = re.sub(r'\b\d{2}/\d{2}\b', '', cleaned)
         cleaned = re.sub(r'\b\d{4}\b(?![\d])', '', cleaned)
-        # Remove ID patterns like ID:XXXXXXXXXX12345, Conf# abc123
-        cleaned = re.sub(r'ID:[A-Za-z0-9X]+', 'ID:X', cleaned)
-        cleaned = re.sub(r'Conf#\s*\S+', '', cleaned)
-        # Remove trailing whitespace and truncate
+        # Remove CHECKCARD prefix and trailing junk
+        cleaned = re.sub(r'^CHECKCARD\s*', '', cleaned)
+        # Collapse whitespace and trim
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-        return cleaned[:35]
+        return cleaned[:35] if cleaned else name[:35]
 
     expense_groups = defaultdict(list)
     income_groups = defaultdict(list)
