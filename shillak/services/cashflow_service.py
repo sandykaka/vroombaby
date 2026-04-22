@@ -137,11 +137,23 @@ Analyze the REAL transactions above and return ONLY valid JSON (no markdown):
     "Only include alerts based on REAL data analysis"
   ],
   "monthly_summary": {{
-    "avg_monthly_income": 7000,
-    "avg_monthly_spend": 5500,
-    "top_categories": [{{"category": "Rent", "amount": 2000}}]
+    "avg_monthly_income": 0,
+    "avg_monthly_spend": 0,
+    "top_categories": [
+      {{"category": "<category name>", "amount": 0}}
+    ]
   }}
 }}
+
+CRITICAL RULES:
+- recurring_bills MUST include ALL recurring payments detected in the data including
+  mortgage/rent, utilities, phone, insurance, subscriptions — do NOT omit any.
+- top_categories MUST include at least 5-8 categories that cover ALL spending.
+  Break down into: Mortgage/Rent, Utilities, Groceries, Dining, Transport, Subscriptions,
+  Shopping, Insurance, etc. Use ACTUAL amounts from transaction data, not estimates.
+  Categories must sum to approximately the avg_monthly_spend total.
+- avg_monthly_income and avg_monthly_spend must be calculated from ACTUAL transaction totals,
+  not rounded estimates.
 
 Provide exactly 4 weekly predictions starting from the Monday of the current week.
 
