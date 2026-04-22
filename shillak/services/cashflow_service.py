@@ -96,41 +96,45 @@ def analyze_cashflow(home, dry_run=False):
 
     today = date.today()
 
-    prompt = f"""You are a personal finance analyst. Analyze 6 months of bank transaction
-history and predict the user's cash flow for the next 4 weeks.
+    prompt = f"""You are a personal finance analyst. Analyze the ACTUAL transaction history
+below and predict this user's REAL cash flow for the next 4 weeks.
+
+IMPORTANT: Base ALL predictions on the ACTUAL transaction data provided below.
+Do NOT use placeholder or example values. Every amount, bill name, and income
+source must come from patterns you observe in the real transaction history.
 
 Note: In Plaid data, NEGATIVE amounts are income (money coming in) and
 POSITIVE amounts are expenses (money going out).
 
 Today's date: {today}
 
-Transaction history ({len(txn_data)} transactions):
+ACTUAL transaction history ({len(txn_data)} transactions):
 {json.dumps(txn_data, indent=None)}
 
-Current account balances:
+ACTUAL current account balances:
 {json.dumps(balance_data, indent=None)}
 
-Analyze the data and return ONLY valid JSON (no markdown, no explanation):
+Analyze the REAL transactions above and return ONLY valid JSON (no markdown):
 {{
   "recurring_bills": [
-    {{"name": "Rent", "amount": 2000, "typical_day": 1, "frequency": "monthly", "merchant": "LANDLORD LLC"}}
+    {{"name": "<REAL bill name from transactions>", "amount": 0, "typical_day": 0, "frequency": "monthly", "merchant": "<REAL merchant>"}}
   ],
   "income_patterns": [
-    {{"source": "Employer Direct Deposit", "amount": 3500, "frequency": "biweekly", "typical_days": [15, 30]}}
+    {{"source": "<REAL income source from transactions>", "amount": 0, "frequency": "biweekly", "typical_days": []}}
   ],
   "weekly_predictions": [
     {{
       "week_start": "YYYY-MM-DD",
       "week_end": "YYYY-MM-DD",
-      "predicted_spend": 800,
+      "predicted_spend": 0,
       "predicted_income": 0,
-      "bills_due": [{{"name": "Netflix", "amount": 15}}],
-      "estimated_end_balance": 2700,
+      "bills_due": [{{"name": "<REAL bill>", "amount": 0}}],
+      "estimated_end_balance": 0,
       "risk_level": "low"
     }}
   ],
   "alerts": [
-    "Description of any weeks where balance may be insufficient"
+    "Only include alerts based on REAL data analysis"
   ],
   "monthly_summary": {{
     "avg_monthly_income": 7000,
