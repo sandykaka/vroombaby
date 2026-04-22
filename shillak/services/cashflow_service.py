@@ -231,6 +231,72 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         logger.error(f"OpenAI analysis failed for {home.name}: {e}")
         return None
 
+    # Override weekly predictions with code-calculated values
+    # (AI is unreliable at mapping bills to specific weeks)
+    from datetime import timedelta
+    import calendar
+
+    # Find Monday of current week
+    monday = today - timedelta(days=today.weekday())
+
+    code_predictions = []
+    running_balance = float(current_total_balance)
+
+    for week_num in range(4):
+        week_start = monday + timedelta(weeks=week_num)
+        week_end = week_start + timedelta(days=6)
+
+        # Find bills due this week based on typical_day
+        week_bills = []
+        week_spend = 0
+        for exp in expense_summary:
+            typical_day = exp['typical_day_of_month']
+            # Check if typical_day falls within this week
+            for day_offset in range(7):
+                check_date = week_start + timedelta(days=day_offset)
+                if check_date.day == typical_day:
+                    avg_amt = exp['avg_amount']
+                    week_bills.append({
+                        'name': exp['name'][:40],
+                        'amount': avg_amt,
+                    })
+                    week_spend += avg_amt
+                    break
+
+        # Find income this week
+        week_income = 0
+        for inc in income_summary:
+            typical_day = inc['typical_day_of_month']
+            for day_offset in range(7):
+                check_date = week_start + timedelta(days=day_offset)
+                if check_date.day == typical_day:
+                    week_income += inc['avg_amount']
+                    break
+
+        running_balance = running_balance + week_income - week_spend
+
+        if running_balance > 500:
+            risk = 'low'
+        elif running_balance >= 0:
+            risk = 'medium'
+        else:
+            risk = 'high'
+
+        code_predictions.append({
+            'week_start': str(week_start),
+            'week_end': str(week_end),
+            'predicted_spend': round(week_spend, 2),
+            'predicted_income': round(week_income, 2),
+            'bills_due': week_bills,
+            'estimated_end_balance': round(running_balance, 2),
+            'risk_level': risk,
+        })
+
+    # Use code-calculated predictions but keep AI's categorization
+    analysis['weekly_predictions'] = code_predictions
+    analysis['monthly_summary']['avg_monthly_income'] = round(total_monthly_income, 2)
+    analysis['monthly_summary']['avg_monthly_spend'] = round(total_monthly_expenses, 2)
+
     # Save predictions
     # Remember old alert state so we don't re-alert if balance unchanged
     old_predictions = {
