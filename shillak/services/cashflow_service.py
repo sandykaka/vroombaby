@@ -144,7 +144,17 @@ Analyze the REAL transactions above and return ONLY valid JSON (no markdown):
 }}
 
 Provide exactly 4 weekly predictions starting from the Monday of the current week.
-risk_level should be: "low" (comfortable), "medium" (tight), "high" (likely insufficient).
+
+CRITICAL RULES:
+- predicted_spend MUST vary week to week based on ACTUAL spending patterns in the data.
+  Do NOT simply divide monthly spending by 4. Look at which week specific bills fall in.
+  Week with mortgage/rent should have much higher spend than weeks without.
+- bills_due should ONLY include bills that actually fall within that specific week's dates.
+- predicted_income should ONLY include income expected in that specific week based on
+  actual deposit patterns (dates and amounts from transaction history).
+- estimated_end_balance = previous week's end balance + predicted_income - predicted_spend.
+  The first week starts with the ACTUAL current balance from the balance data above.
+- risk_level: "low" (end balance > 500), "medium" (end balance 0-500), "high" (end balance < 0).
 """
 
     if dry_run:
