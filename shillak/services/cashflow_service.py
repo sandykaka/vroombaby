@@ -104,13 +104,20 @@ Do NOT use placeholder or example values. Every amount, bill name, and income
 source must come from patterns you observe in the real transaction history.
 
 CRITICAL — Plaid transaction sign convention:
-- POSITIVE amount = money LEAVING the account (expenses, bill payments, purchases)
-- NEGATIVE amount = money ENTERING the account (paycheck, deposits, refunds, transfers in)
+- POSITIVE amount = money LEAVING the account (expenses, bill payments, purchases, transfers OUT)
+- NEGATIVE amount = money ENTERING the account (paycheck, deposits, refunds, transfers IN)
 - When calculating income: use ONLY transactions with NEGATIVE amounts
 - When calculating spending: use ONLY transactions with POSITIVE amounts
-- Do NOT count negative amounts (income/deposits) as spending
-- Do NOT count transfers between the user's own accounts as spending or income
-- "Loan Payments" or large negative amounts from employers are INCOME, not expenses
+- Credit card payments (Chase, Citi, Amex, Discover) ARE expenses — include them
+- Zelle/Venmo payments SENT are expenses — include them
+- Loan payments (student loans, mortgage) ARE expenses — include them
+- Recurring Zelle transfers to the same person = recurring bill
+- Do NOT count transfers between the user's own accounts as income AND spending
+  (e.g. Capital One transfer in is income OR the corresponding transfer out is expense, not both)
+
+IMPORTANT: Include ALL recurring payments as recurring_bills, including:
+- Mortgage, rent, credit card autopays, loan payments, Zelle recurring transfers,
+  subscriptions, utilities, phone, tuition, insurance — anything that repeats monthly
 
 Today's date: {today}
 
@@ -154,9 +161,10 @@ Analyze the REAL transactions above and return ONLY valid JSON (no markdown):
 CRITICAL RULES:
 - recurring_bills MUST include ALL recurring payments detected in the data including
   mortgage/rent, utilities, phone, insurance, subscriptions — do NOT omit any.
-- top_categories MUST include at least 5-8 categories that cover ALL spending.
-  Break down into: Mortgage/Rent, Utilities, Groceries, Dining, Transport, Subscriptions,
-  Shopping, Insurance, etc. Use ACTUAL amounts from transaction data, not estimates.
+- top_categories should cover ALL major spending areas found in the transaction data.
+  Common categories include: Mortgage/Rent, Utilities, Groceries, Dining, Transport,
+  Subscriptions, Shopping, Insurance, etc. Only include categories with actual spending.
+  Use ACTUAL amounts from transaction data, not estimates.
   Categories must sum to approximately the avg_monthly_spend total.
 - avg_monthly_income and avg_monthly_spend must be calculated from ACTUAL transaction totals,
   not rounded estimates.
