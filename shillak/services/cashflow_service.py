@@ -88,34 +88,54 @@ def analyze_cashflow(home, dry_run=False):
 
     def normalize_name(name):
         """Strip variable parts to group recurring transactions."""
-        # Use merchant_name if available, otherwise clean the transaction name
         # Remove everything after DES:, ID:, Conf#, for "
         cleaned = re.split(r'\bDES:', name)[0]
         cleaned = re.split(r'\bID:', cleaned)[0]
         cleaned = re.split(r'\bConf#', cleaned)[0]
         cleaned = re.split(r'\bfor "', cleaned)[0]
-        # Remove date patterns like 03/05, 0305
-        cleaned = re.sub(r'\b\d{2}/\d{2}\b', '', cleaned)
-        cleaned = re.sub(r'\b\d{4}\b(?![\d])', '', cleaned)
-        # Remove CHECKCARD prefix and trailing junk
+        # Remove CHECKCARD prefix
         cleaned = re.sub(r'^CHECKCARD\s*', '', cleaned)
+        # Remove ACH HOLD prefix
+        cleaned = re.sub(r'^ACH HOLD\s*', '', cleaned)
+        # Remove date patterns like 03/05, 0305, XX/XX
+        cleaned = re.sub(r'\b\d{2}/?\d{2}\b', '', cleaned)
+        # Remove masked account numbers XXXXX01413 etc
+        cleaned = re.sub(r'X{3,}\d*', '', cleaned)
+        # Remove location suffixes (BELLEVUE WA, New York NY etc)
+        cleaned = re.sub(r'\b[A-Z]{2}\s*$', '', cleaned)
         # Collapse whitespace and trim
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         return cleaned[:35] if cleaned else name[:35]
 
+    # Known internal transfer patterns to exclude
+    INTERNAL_TRANSFER_NAMES = {
+        'BANK OF AMERICA, N.A.',
+        'CAPITAL ONE',
+        'Monthly Interest Paid',
+        'OVERDRAFT ITEM FEE',
+    }
+
+    def is_internal_transfer(name):
+        normalized = normalize_name(name)
+        return any(t in normalized for t in INTERNAL_TRANSFER_NAMES)
+
     expense_groups = defaultdict(list)
     income_groups = defaultdict(list)
     for t in txn_data:
+        if is_internal_transfer(t['name']):
+            continue
         key = normalize_name(t['name'])
         if t['amount'] > 0:
             expense_groups[key].append({'date': t['date'], 'amount': t['amount']})
         elif t['amount'] < 0:
             income_groups[key].append({'date': t['date'], 'amount': abs(t['amount'])})
 
-    # Build expense summary
+    # Build expense summary — only include recurring (2+ occurrences)
     expense_summary = []
     total_monthly_expenses = 0
     for name, occurrences in sorted(expense_groups.items(), key=lambda x: -sum(o['amount'] for o in x[1])):
+        if len(occurrences) < 2:
+            continue
         avg = sum(o['amount'] for o in occurrences) / len(occurrences)
         days = [int(d.split('-')[2]) for d in [o['date'] for o in occurrences]]
         total_monthly_expenses += avg
@@ -128,10 +148,30 @@ def analyze_cashflow(home, dry_run=False):
             'amounts': [o['amount'] for o in occurrences],
         })
 
-    # Build income summary
+    # Build income summary — split groups with very different amounts
+    # (e.g. APPLE INC. has payroll $3,765 AND subscription $250)
+    split_income_groups = defaultdict(list)
+    for name, occurrences in income_groups.items():
+        if len(occurrences) >= 2:
+            amounts = [o['amount'] for o in occurrences]
+            avg = sum(amounts) / len(amounts)
+            # If max is >3x min, split into high/low groups
+            if max(amounts) > 3 * min(amounts):
+                for o in occurrences:
+                    if o['amount'] > avg:
+                        split_income_groups[name + ' (payroll)'].append(o)
+                    else:
+                        split_income_groups[name + ' (other)'].append(o)
+            else:
+                split_income_groups[name] = occurrences
+        else:
+            split_income_groups[name] = occurrences
+
     income_summary = []
     total_monthly_income = 0
-    for name, occurrences in sorted(income_groups.items(), key=lambda x: -sum(o['amount'] for o in x[1])):
+    for name, occurrences in sorted(split_income_groups.items(), key=lambda x: -sum(o['amount'] for o in x[1])):
+        if len(occurrences) < 2:
+            continue
         avg = sum(o['amount'] for o in occurrences) / len(occurrences)
         days = [int(d.split('-')[2]) for d in [o['date'] for o in occurrences]]
         total_monthly_income += avg
