@@ -80,32 +80,50 @@ def analyze_cashflow(home, dry_run=False):
             'amount': float(t['amount']),
             'name': t['name'],
             'merchant': t['merchant_name'] or '',
-            'category': t['category'] or [],
-            'pfc': t['personal_finance_category'] or '',
         })
 
-    # Pre-analyze: group recurring expenses to help AI
+    # Pre-analyze: group expenses and income by merchant
     from collections import defaultdict
     expense_groups = defaultdict(list)
     income_groups = defaultdict(list)
     for t in txn_data:
-        key = t['name'][:30]
+        key = t['name'][:40]
         if t['amount'] > 0:
             expense_groups[key].append({'date': t['date'], 'amount': t['amount']})
-        else:
+        elif t['amount'] < 0:
             income_groups[key].append({'date': t['date'], 'amount': abs(t['amount'])})
 
-    recurring_hint = "PRE-ANALYSIS — Expenses grouped by merchant (to help identify recurring bills):\n"
+    # Build expense summary
+    expense_summary = []
+    total_monthly_expenses = 0
     for name, occurrences in sorted(expense_groups.items(), key=lambda x: -sum(o['amount'] for o in x[1])):
-        total = sum(o['amount'] for o in occurrences)
-        dates = [o['date'] for o in occurrences]
-        recurring_hint += f"  {name}: {len(occurrences)}x, total ${total:,.2f}, dates={dates}\n"
+        avg = sum(o['amount'] for o in occurrences) / len(occurrences)
+        days = [int(d.split('-')[2]) for d in [o['date'] for o in occurrences]]
+        total_monthly_expenses += avg
+        expense_summary.append({
+            'name': name,
+            'occurrences': len(occurrences),
+            'avg_amount': round(avg, 2),
+            'typical_day_of_month': round(sum(days) / len(days)),
+            'dates': [o['date'] for o in occurrences],
+            'amounts': [o['amount'] for o in occurrences],
+        })
 
-    recurring_hint += "\nIncome grouped by source:\n"
+    # Build income summary
+    income_summary = []
+    total_monthly_income = 0
     for name, occurrences in sorted(income_groups.items(), key=lambda x: -sum(o['amount'] for o in x[1])):
-        total = sum(o['amount'] for o in occurrences)
-        dates = [o['date'] for o in occurrences]
-        recurring_hint += f"  {name}: {len(occurrences)}x, total ${total:,.2f}, dates={dates}\n"
+        avg = sum(o['amount'] for o in occurrences) / len(occurrences)
+        days = [int(d.split('-')[2]) for d in [o['date'] for o in occurrences]]
+        total_monthly_income += avg
+        income_summary.append({
+            'name': name,
+            'occurrences': len(occurrences),
+            'avg_amount': round(avg, 2),
+            'typical_day_of_month': round(sum(days) / len(days)),
+            'dates': [o['date'] for o in occurrences],
+            'amounts': [o['amount'] for o in occurrences],
+        })
 
     balance_data = []
     for a in accounts:
@@ -117,48 +135,38 @@ def analyze_cashflow(home, dry_run=False):
             'available': float(a['balance_available']) if a['balance_available'] else None,
         })
 
+    current_total_balance = sum(b['balance'] for b in balance_data)
     today = date.today()
 
-    prompt = f"""You are a personal finance analyst. Analyze the ACTUAL transaction history
-below and predict this user's REAL cash flow for the next 4 weeks.
-
-IMPORTANT: Base ALL predictions on the ACTUAL transaction data provided below.
-Do NOT use placeholder or example values. Every amount, bill name, and income
-source must come from patterns you observe in the real transaction history.
-
-CRITICAL — Plaid transaction sign convention:
-- POSITIVE amount = money LEAVING the account (expenses, bill payments, purchases, transfers OUT)
-- NEGATIVE amount = money ENTERING the account (paycheck, deposits, refunds, transfers IN)
-- When calculating income: use ONLY transactions with NEGATIVE amounts
-- When calculating spending: use ONLY transactions with POSITIVE amounts
-- Credit card payments (Chase, Citi, Amex, Discover) ARE expenses — include them
-- Zelle/Venmo payments SENT are expenses — include them
-- Loan payments (student loans, mortgage) ARE expenses — include them
-- Recurring Zelle transfers to the same person = recurring bill
-- Do NOT count transfers between the user's own accounts as income AND spending
-  (e.g. Capital One transfer in is income OR the corresponding transfer out is expense, not both)
-
-IMPORTANT: Include ALL recurring payments as recurring_bills, including:
-- Mortgage, rent, credit card autopays, loan payments, Zelle recurring transfers,
-  subscriptions, utilities, phone, tuition, insurance — anything that repeats monthly
+    prompt = f"""You are a personal finance analyst. Based on the pre-analyzed transaction
+data below, predict this user's cash flow for the next 4 weeks.
 
 Today's date: {today}
+Current total balance across all accounts: ${current_total_balance:,.2f}
 
-ACTUAL transaction history ({len(txn_data)} transactions):
-{json.dumps(txn_data, indent=None)}
+=== RECURRING EXPENSES (grouped from 6 months of bank data) ===
+Each entry shows: name, how many times it occurred, average amount, typical day of month.
+EVERY entry below is a real recurring expense. Include ALL of them.
 
-ACTUAL current account balances:
+{json.dumps(expense_summary, indent=2)}
+
+Total estimated monthly expenses: ${total_monthly_expenses:,.2f}
+
+=== INCOME SOURCES (grouped from 6 months of bank data) ===
+{json.dumps(income_summary, indent=2)}
+
+Total estimated monthly income: ${total_monthly_income:,.2f}
+
+=== ACCOUNT BALANCES ===
 {json.dumps(balance_data, indent=None)}
 
-{recurring_hint}
-
-Analyze the REAL transactions above and return ONLY valid JSON (no markdown):
+Return ONLY valid JSON (no markdown):
 {{
   "recurring_bills": [
-    {{"name": "<REAL bill name from transactions>", "amount": 0, "typical_day": 0, "frequency": "monthly", "merchant": "<REAL merchant>"}}
+    {{"name": "<from expense data above>", "amount": 0, "typical_day": 0, "frequency": "monthly", "merchant": ""}}
   ],
   "income_patterns": [
-    {{"source": "<REAL income source from transactions>", "amount": 0, "frequency": "biweekly", "typical_days": []}}
+    {{"source": "<from income data above>", "amount": 0, "frequency": "biweekly", "typical_days": []}}
   ],
   "weekly_predictions": [
     {{
@@ -166,54 +174,34 @@ Analyze the REAL transactions above and return ONLY valid JSON (no markdown):
       "week_end": "YYYY-MM-DD",
       "predicted_spend": 0,
       "predicted_income": 0,
-      "bills_due": [{{"name": "<REAL bill>", "amount": 0}}],
+      "bills_due": [{{"name": "<bill name>", "amount": 0}}],
       "estimated_end_balance": 0,
       "risk_level": "low"
     }}
   ],
-  "alerts": [
-    "Only include alerts based on REAL data analysis"
-  ],
+  "alerts": [],
   "monthly_summary": {{
-    "avg_monthly_income": 0,
-    "avg_monthly_spend": 0,
+    "avg_monthly_income": {total_monthly_income:.2f},
+    "avg_monthly_spend": {total_monthly_expenses:.2f},
     "top_categories": [
-      {{"category": "<category name>", "amount": 0}}
+      {{"category": "<category>", "amount": 0}}
     ]
   }}
 }}
 
-CRITICAL RULES:
-- recurring_bills MUST include ALL recurring payments detected in the data including
-  mortgage/rent, utilities, phone, insurance, subscriptions — do NOT omit any.
-- top_categories should cover ALL major spending areas found in the transaction data.
-  Common categories include: Mortgage/Rent, Utilities, Groceries, Dining, Transport,
-  Subscriptions, Shopping, Insurance, etc. Only include categories with actual spending.
-  Use ACTUAL amounts from transaction data, not estimates.
-  Categories must sum to approximately the avg_monthly_spend total.
-- avg_monthly_income and avg_monthly_spend must be calculated from ACTUAL transaction totals,
-  not rounded estimates.
+RULES:
+- recurring_bills: Include EVERY expense group listed above. Each one is a real bill.
+- weekly_predictions: For each week, check which bills have their typical_day in that
+  week's date range. Include ALL matching bills in bills_due.
+- predicted_spend = sum of all bills_due amounts for that week.
+- predicted_income: Check which income sources have deposits in that week. Sum them.
+- estimated_end_balance: Week 1 starts at ${current_total_balance:,.2f} (actual balance).
+  Each next week: previous end_balance + predicted_income - predicted_spend.
+- risk_level: "low" (end > 500), "medium" (0-500), "high" (< 0).
+- monthly_summary: avg_monthly_income={total_monthly_income:.2f}, avg_monthly_spend={total_monthly_expenses:.2f} (pre-calculated, use these exact values).
+- top_categories: Group ALL expenses into categories. Must sum to avg_monthly_spend.
 
-Provide exactly 4 weekly predictions starting from the Monday of the current week.
-
-CRITICAL RULES:
-- predicted_spend MUST vary week to week based on ACTUAL spending patterns in the data.
-  Do NOT simply divide monthly spending by 4. Look at which week specific bills fall in.
-  Week with mortgage/rent should have much higher spend than weeks without.
-- A single week can have MULTIPLE bills due. List ALL of them in bills_due.
-- bills_due should ONLY include bills that actually fall within that specific week's dates.
-- predicted_spend for each week = sum of all bills_due PLUS estimated regular spending (groceries, gas, etc).
-- predicted_income should ONLY include income expected in that specific week based on
-  actual deposit patterns (dates and amounts from transaction history).
-  Include ALL income sources: paycheck, Zelle incoming, rent from tenants, etc.
-- estimated_end_balance = previous week's end balance + predicted_income - predicted_spend.
-  The FIRST week starts with the ACTUAL current total balance from the balance data
-  (sum of all account balances = ${sum(b['balance'] for b in balance_data):,.2f}).
-- risk_level: "low" (end balance > 500), "medium" (end balance 0-500), "high" (end balance < 0).
-- top_categories must ONLY include actual expenses (positive transactions).
-  Do NOT include income, deposits, or transfers in as spending categories.
-- avg_monthly_spend MUST equal the sum of all top_categories amounts.
-- avg_monthly_income MUST be calculated from ALL negative (incoming) transactions per month.
+Provide exactly 4 weekly predictions starting from Monday of current week.
 """
 
     if dry_run:
