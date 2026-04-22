@@ -103,8 +103,14 @@ IMPORTANT: Base ALL predictions on the ACTUAL transaction data provided below.
 Do NOT use placeholder or example values. Every amount, bill name, and income
 source must come from patterns you observe in the real transaction history.
 
-Note: In Plaid data, NEGATIVE amounts are income (money coming in) and
-POSITIVE amounts are expenses (money going out).
+CRITICAL — Plaid transaction sign convention:
+- POSITIVE amount = money LEAVING the account (expenses, bill payments, purchases)
+- NEGATIVE amount = money ENTERING the account (paycheck, deposits, refunds, transfers in)
+- When calculating income: use ONLY transactions with NEGATIVE amounts
+- When calculating spending: use ONLY transactions with POSITIVE amounts
+- Do NOT count negative amounts (income/deposits) as spending
+- Do NOT count transfers between the user's own accounts as spending or income
+- "Loan Payments" or large negative amounts from employers are INCOME, not expenses
 
 Today's date: {today}
 
@@ -165,8 +171,11 @@ CRITICAL RULES:
 - predicted_income should ONLY include income expected in that specific week based on
   actual deposit patterns (dates and amounts from transaction history).
 - estimated_end_balance = previous week's end balance + predicted_income - predicted_spend.
-  The first week starts with the ACTUAL current balance from the balance data above.
+  The FIRST week starts with the ACTUAL current total balance from the balance data
+  (sum of all account balances = ${sum(b['balance'] for b in balance_data):,.2f}).
 - risk_level: "low" (end balance > 500), "medium" (end balance 0-500), "high" (end balance < 0).
+- top_categories must ONLY include actual expenses (positive transactions).
+  Do NOT include income, deposits, or transfers in as spending categories.
 """
 
     if dry_run:
