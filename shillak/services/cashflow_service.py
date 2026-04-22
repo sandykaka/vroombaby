@@ -84,6 +84,29 @@ def analyze_cashflow(home, dry_run=False):
             'pfc': t['personal_finance_category'] or '',
         })
 
+    # Pre-analyze: group recurring expenses to help AI
+    from collections import defaultdict
+    expense_groups = defaultdict(list)
+    income_groups = defaultdict(list)
+    for t in txn_data:
+        key = t['name'][:30]
+        if t['amount'] > 0:
+            expense_groups[key].append({'date': t['date'], 'amount': t['amount']})
+        else:
+            income_groups[key].append({'date': t['date'], 'amount': abs(t['amount'])})
+
+    recurring_hint = "PRE-ANALYSIS — Expenses grouped by merchant (to help identify recurring bills):\n"
+    for name, occurrences in sorted(expense_groups.items(), key=lambda x: -sum(o['amount'] for o in x[1])):
+        total = sum(o['amount'] for o in occurrences)
+        dates = [o['date'] for o in occurrences]
+        recurring_hint += f"  {name}: {len(occurrences)}x, total ${total:,.2f}, dates={dates}\n"
+
+    recurring_hint += "\nIncome grouped by source:\n"
+    for name, occurrences in sorted(income_groups.items(), key=lambda x: -sum(o['amount'] for o in x[1])):
+        total = sum(o['amount'] for o in occurrences)
+        dates = [o['date'] for o in occurrences]
+        recurring_hint += f"  {name}: {len(occurrences)}x, total ${total:,.2f}, dates={dates}\n"
+
     balance_data = []
     for a in accounts:
         balance_data.append({
@@ -126,6 +149,8 @@ ACTUAL transaction history ({len(txn_data)} transactions):
 
 ACTUAL current account balances:
 {json.dumps(balance_data, indent=None)}
+
+{recurring_hint}
 
 Analyze the REAL transactions above and return ONLY valid JSON (no markdown):
 {{
