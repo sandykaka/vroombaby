@@ -200,15 +200,20 @@ CRITICAL RULES:
 - predicted_spend MUST vary week to week based on ACTUAL spending patterns in the data.
   Do NOT simply divide monthly spending by 4. Look at which week specific bills fall in.
   Week with mortgage/rent should have much higher spend than weeks without.
+- A single week can have MULTIPLE bills due. List ALL of them in bills_due.
 - bills_due should ONLY include bills that actually fall within that specific week's dates.
+- predicted_spend for each week = sum of all bills_due PLUS estimated regular spending (groceries, gas, etc).
 - predicted_income should ONLY include income expected in that specific week based on
   actual deposit patterns (dates and amounts from transaction history).
+  Include ALL income sources: paycheck, Zelle incoming, rent from tenants, etc.
 - estimated_end_balance = previous week's end balance + predicted_income - predicted_spend.
   The FIRST week starts with the ACTUAL current total balance from the balance data
   (sum of all account balances = ${sum(b['balance'] for b in balance_data):,.2f}).
 - risk_level: "low" (end balance > 500), "medium" (end balance 0-500), "high" (end balance < 0).
 - top_categories must ONLY include actual expenses (positive transactions).
   Do NOT include income, deposits, or transfers in as spending categories.
+- avg_monthly_spend MUST equal the sum of all top_categories amounts.
+- avg_monthly_income MUST be calculated from ALL negative (incoming) transactions per month.
 """
 
     if dry_run:
