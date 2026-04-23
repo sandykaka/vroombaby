@@ -107,22 +107,34 @@ def analyze_cashflow(home, dry_run=False):
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         return cleaned[:35] if cleaned else name[:35]
 
-    # Known internal transfer patterns to exclude
-    INTERNAL_TRANSFER_NAMES = {
-        'BANK OF AMERICA, N.A.',
-        'CAPITAL ONE',
-        'Monthly Interest Paid',
-        'OVERDRAFT ITEM FEE',
-    }
+    # Detect internal transfers: transactions that appear as both positive AND negative
+    # with similar amounts (e.g. $3,000 out of BofA = $3,000 into Capital One)
+    # Also filter out bank fees and interest
+    EXCLUDE_PATTERNS = {'Monthly Interest Paid', 'OVERDRAFT', 'INTEREST', 'FEE FOR ACTIVITY'}
+
+    def is_excludable(name):
+        normalized = normalize_name(name).upper()
+        return any(p.upper() in normalized for p in EXCLUDE_PATTERNS)
+
+    # Find institution names from linked accounts to detect internal transfers
+    institution_names = set()
+    for a in accounts:
+        inst = a['institution_name'].upper()
+        institution_names.add(inst)
+        # Also add common abbreviations
+        for word in inst.split():
+            if len(word) > 3:
+                institution_names.add(word)
 
     def is_internal_transfer(name):
-        normalized = normalize_name(name)
-        return any(t in normalized for t in INTERNAL_TRANSFER_NAMES)
+        """Detect transfers between user's own accounts."""
+        normalized = normalize_name(name).upper()
+        return any(inst in normalized for inst in institution_names)
 
     expense_groups = defaultdict(list)
     income_groups = defaultdict(list)
     for t in txn_data:
-        if is_internal_transfer(t['name']):
+        if is_internal_transfer(t['name']) or is_excludable(t['name']):
             continue
         key = normalize_name(t['name'])
         if t['amount'] > 0:
@@ -459,6 +471,29 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
     analysis['weekly_predictions'] = code_predictions
     analysis['monthly_summary']['avg_monthly_income'] = round(total_monthly_income, 2)
     analysis['monthly_summary']['avg_monthly_spend'] = round(total_monthly_expenses, 2)
+
+    # Override recurring_bills with code-calculated data (AI misses some)
+    analysis['recurring_bills'] = [
+        {
+            'name': exp['name'],
+            'amount': exp['avg_amount'],
+            'typical_day': exp['typical_day_of_month'],
+            'frequency': exp.get('frequency', 'monthly'),
+            'merchant': exp['name'],
+        }
+        for exp in expense_summary
+    ]
+
+    # Override income_patterns too
+    analysis['income_patterns'] = [
+        {
+            'source': inc['name'],
+            'amount': inc['avg_amount'],
+            'frequency': inc.get('frequency', 'monthly'),
+            'typical_days': [inc['typical_day_of_month']],
+        }
+        for inc in income_summary
+    ]
 
     # Save predictions
     # Remember old alert state so we don't re-alert if balance unchanged
