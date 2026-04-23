@@ -7,7 +7,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
 from .decorators import require_firebase_auth
-from .models import BankAccount, CashFlowPrediction, Home, HomeMember, PlaidItem, Transaction, TransferRequest, UserProfile
+from .models import BankAccount, BillAlias, CashFlowPrediction, Home, HomeMember, PlaidItem, Transaction, TransferRequest, UserProfile
 from .services import plaid_service
 from .services.notification_service import NotificationService
 from .services import cashflow_service
@@ -783,6 +783,15 @@ def cashflow_predictions_api(request):
 
     predictions = CashFlowPrediction.objects.filter(home=membership.home)
 
+    # Get bill aliases for display name mapping
+    aliases = {
+        a.normalized_name: a.display_name
+        for a in BillAlias.objects.filter(home=membership.home)
+    }
+
+    def apply_alias(name):
+        return aliases.get(name, name)
+
     return JsonResponse({
         'predictions': [
             {
@@ -793,10 +802,16 @@ def cashflow_predictions_api(request):
                 'predicted_income': str(p.predicted_income),
                 'estimated_end_balance': str(p.estimated_end_balance),
                 'risk_level': p.risk_level,
-                'bills_due': p.bills_due,
+                'bills_due': [
+                    {**b, 'name': apply_alias(b['name'])}
+                    for b in p.bills_due
+                ],
                 'alerts': p.alerts,
                 'monthly_summary': p.monthly_summary,
-                'recurring_bills': p.recurring_bills,
+                'recurring_bills': [
+                    {**b, 'name': apply_alias(b['name'])}
+                    for b in p.recurring_bills
+                ],
                 'income_patterns': p.income_patterns,
             }
             for p in predictions
@@ -835,6 +850,41 @@ def analyze_cashflow_api(request):
     except Exception as e:
         logger.error(f"Cash flow analysis failed: {e}")
         return JsonResponse({'error': 'Analysis failed'}, status=500)
+
+
+@csrf_exempt
+@require_firebase_auth
+def rename_bill_api(request):
+    """Rename a recurring bill for display purposes."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    normalized_name = data.get('normalized_name', '').strip()
+    display_name = data.get('display_name', '').strip()
+
+    if not normalized_name or not display_name:
+        return JsonResponse({'error': 'Missing normalized_name or display_name'}, status=400)
+
+    membership = HomeMember.objects.filter(user=request.user).first()
+    if not membership:
+        return JsonResponse({'error': 'Not in a home'}, status=400)
+
+    alias, created = BillAlias.objects.update_or_create(
+        home=membership.home,
+        normalized_name=normalized_name,
+        defaults={'display_name': display_name},
+    )
+
+    return JsonResponse({
+        'status': 'updated',
+        'normalized_name': alias.normalized_name,
+        'display_name': alias.display_name,
+    })
 
 
 @require_firebase_auth

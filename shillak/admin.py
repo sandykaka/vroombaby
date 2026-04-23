@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import BankAccount, CashFlowPrediction, Home, HomeMember, PlaidItem, Transaction, TransferRequest, UserProfile
+from .models import BankAccount, BillAlias, CashFlowPrediction, Home, HomeMember, PlaidItem, Transaction, TransferRequest, UserProfile
 
 
 @admin.register(UserProfile)
@@ -58,3 +58,9 @@ class CashFlowPredictionAdmin(admin.ModelAdmin):
     list_display = ('home', 'week_start', 'week_end', 'predicted_spend', 'risk_level', 'created_at')
     list_filter = ('risk_level',)
     ordering = ('-created_at',)
+
+
+@admin.register(BillAlias)
+class BillAliasAdmin(admin.ModelAdmin):
+    list_display = ('home', 'normalized_name', 'display_name', 'updated_at')
+    search_fields = ('normalized_name', 'display_name')

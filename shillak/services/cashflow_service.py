@@ -130,20 +130,82 @@ def analyze_cashflow(home, dry_run=False):
         elif t['amount'] < 0:
             income_groups[key].append({'date': t['date'], 'amount': abs(t['amount'])})
 
+    # Merge consecutive same-person payments within 2 days
+    # (e.g. Zelle rent split: $3,500 + $1,800 on same/next day = $5,300 single payment)
+    def merge_consecutive_payments(occurrences):
+        """Merge payments to the same person within 1 business day into single entries.
+        Friday→Monday (3 calendar days) counts as consecutive since banks skip weekends."""
+        if len(occurrences) < 2:
+            return occurrences
+
+        from datetime import datetime as dt
+        sorted_occ = sorted(occurrences, key=lambda x: x['date'])
+        merged = []
+        i = 0
+        while i < len(sorted_occ):
+            current = sorted_occ[i]
+            combined_amount = current['amount']
+            while i + 1 < len(sorted_occ):
+                next_occ = sorted_occ[i + 1]
+                curr_date = dt.strptime(current['date'], '%Y-%m-%d').date()
+                next_date = dt.strptime(next_occ['date'], '%Y-%m-%d').date()
+                gap = (next_date - curr_date).days
+                # 0-1 = same/next day, 2 = skip one day, 3 = Fri→Mon
+                if gap <= 3:
+                    combined_amount += next_occ['amount']
+                    i += 1
+                else:
+                    break
+            merged.append({'date': current['date'], 'amount': combined_amount})
+            i += 1
+        return merged
+
+    # Apply merging to expense groups
+    for key in expense_groups:
+        expense_groups[key] = merge_consecutive_payments(expense_groups[key])
+
+    def detect_frequency(dates_list):
+        """Detect payment frequency from actual date intervals."""
+        if len(dates_list) < 2:
+            return 'monthly'
+        from datetime import datetime as dt
+        parsed = sorted([dt.strptime(d, '%Y-%m-%d').date() for d in dates_list])
+        intervals = [(parsed[i+1] - parsed[i]).days for i in range(len(parsed)-1)]
+        avg_interval = sum(intervals) / len(intervals)
+        if avg_interval <= 10:
+            return 'weekly'
+        elif avg_interval <= 20:
+            return 'biweekly'
+        elif avg_interval <= 45:
+            return 'monthly'
+        elif avg_interval <= 100:
+            return 'quarterly'
+        else:
+            return 'annual'
+
     # Build expense summary — only include recurring (2+ occurrences)
+    import statistics
     expense_summary = []
     total_monthly_expenses = 0
     for name, occurrences in sorted(expense_groups.items(), key=lambda x: -sum(o['amount'] for o in x[1])):
         if len(occurrences) < 2:
             continue
-        avg = sum(o['amount'] for o in occurrences) / len(occurrences)
+        amounts = [o['amount'] for o in occurrences]
+        # Use median to avoid outlier skew (e.g. one unusually large Amex payment)
+        median_amt = statistics.median(amounts)
+        # Calculate consistency: low stdev = high confidence
+        stdev = statistics.stdev(amounts) if len(amounts) > 1 else 0
+        consistency = 'high' if stdev < median_amt * 0.1 else ('medium' if stdev < median_amt * 0.5 else 'low')
         days = [int(d.split('-')[2]) for d in [o['date'] for o in occurrences]]
-        total_monthly_expenses += avg
+        frequency = detect_frequency([o['date'] for o in occurrences])
+        total_monthly_expenses += median_amt
         expense_summary.append({
             'name': name,
             'occurrences': len(occurrences),
-            'avg_amount': round(avg, 2),
+            'avg_amount': round(median_amt, 2),
             'typical_day_of_month': round(sum(days) / len(days)),
+            'frequency': frequency,
+            'confidence': consistency,
             'dates': [o['date'] for o in occurrences],
             'amounts': [o['amount'] for o in occurrences],
         })
@@ -172,14 +234,20 @@ def analyze_cashflow(home, dry_run=False):
     for name, occurrences in sorted(split_income_groups.items(), key=lambda x: -sum(o['amount'] for o in x[1])):
         if len(occurrences) < 2:
             continue
-        avg = sum(o['amount'] for o in occurrences) / len(occurrences)
+        amounts = [o['amount'] for o in occurrences]
+        median_amt = statistics.median(amounts)
+        stdev = statistics.stdev(amounts) if len(amounts) > 1 else 0
+        consistency = 'high' if stdev < median_amt * 0.1 else ('medium' if stdev < median_amt * 0.5 else 'low')
         days = [int(d.split('-')[2]) for d in [o['date'] for o in occurrences]]
-        total_monthly_income += avg
+        frequency = detect_frequency([o['date'] for o in occurrences])
+        total_monthly_income += median_amt
         income_summary.append({
             'name': name,
             'occurrences': len(occurrences),
-            'avg_amount': round(avg, 2),
+            'avg_amount': round(median_amt, 2),
             'typical_day_of_month': round(sum(days) / len(days)),
+            'frequency': frequency,
+            'confidence': consistency,
             'dates': [o['date'] for o in occurrences],
             'amounts': [o['amount'] for o in occurrences],
         })
@@ -294,6 +362,15 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
     # (AI is unreliable at mapping bills to specific weeks)
     from datetime import timedelta
     import calendar
+    import holidays
+
+    us_holidays = holidays.US(years=[today.year, today.year + 1])
+
+    def next_business_day(d):
+        """Shift weekends and federal holidays to next business day."""
+        while d.weekday() >= 5 or d in us_holidays:
+            d += timedelta(days=1)
+        return d
 
     # Find Monday of current week
     monday = today - timedelta(days=today.weekday())
@@ -306,31 +383,58 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         week_end = week_start + timedelta(days=6)
 
         # Find bills due this week based on typical_day
+        # If typical_day falls on weekend, shift to next Monday (banks skip weekends)
         week_bills = []
         week_spend = 0
         for exp in expense_summary:
             typical_day = exp['typical_day_of_month']
-            # Check if typical_day falls within this week
-            for day_offset in range(7):
-                check_date = week_start + timedelta(days=day_offset)
-                if check_date.day == typical_day:
-                    avg_amt = exp['avg_amount']
-                    week_bills.append({
-                        'name': exp['name'][:40],
-                        'amount': avg_amt,
-                    })
-                    week_spend += avg_amt
-                    break
+            # Find the actual date this bill would land on this month
+            try:
+                bill_date = week_start.replace(day=typical_day)
+            except ValueError:
+                # Day doesn't exist this month (e.g. 31st in April)
+                import calendar
+                last_day = calendar.monthrange(week_start.year, week_start.month)[1]
+                bill_date = week_start.replace(day=min(typical_day, last_day))
+
+            # Shift weekends and holidays to next business day
+            bill_date = next_business_day(bill_date)
+
+            if week_start <= bill_date <= week_end:
+                avg_amt = exp['avg_amount']
+                week_bills.append({
+                    'name': exp['name'][:40],
+                    'amount': avg_amt,
+                })
+                week_spend += avg_amt
 
         # Find income this week
+        # Detect frequency from actual date intervals, then project forward
         week_income = 0
         for inc in income_summary:
-            typical_day = inc['typical_day_of_month']
-            for day_offset in range(7):
-                check_date = week_start + timedelta(days=day_offset)
-                if check_date.day == typical_day:
+            dates = sorted(inc['dates'])
+            if len(dates) >= 2:
+                from datetime import datetime as dt
+                parsed = [dt.strptime(d, '%Y-%m-%d').date() for d in dates]
+                # Calculate average interval between consecutive payments
+                intervals = [(parsed[i+1] - parsed[i]).days for i in range(len(parsed)-1)]
+                avg_interval = sum(intervals) / len(intervals)
+
+                # Project forward from last known date using actual interval
+                last_date = parsed[-1]
+                next_date = last_date + timedelta(days=round(avg_interval))
+                while next_date < week_start:
+                    next_date += timedelta(days=round(avg_interval))
+                if week_start <= next_date <= week_end:
                     week_income += inc['avg_amount']
-                    break
+            else:
+                # Single occurrence — use typical day
+                typical_day = inc['typical_day_of_month']
+                for day_offset in range(7):
+                    check_date = week_start + timedelta(days=day_offset)
+                    if check_date.day == typical_day:
+                        week_income += inc['avg_amount']
+                        break
 
         running_balance = running_balance + week_income - week_spend
 

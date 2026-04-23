@@ -225,3 +225,20 @@ class CashFlowPrediction(models.Model):
 
     def __str__(self):
         return f"{self.home.name} — {self.week_start} to {self.week_end} (risk: {self.risk_level})"
+
+
+class BillAlias(models.Model):
+    """User-defined display name for a recurring bill."""
+    home = models.ForeignKey(
+        Home, on_delete=models.CASCADE, related_name='bill_aliases'
+    )
+    normalized_name = models.CharField(max_length=100)
+    display_name = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('home', 'normalized_name')
+
+    def __str__(self):
+        return f"{self.normalized_name} → {self.display_name}"
