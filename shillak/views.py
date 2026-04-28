@@ -809,7 +809,7 @@ def cashflow_predictions_api(request):
                 'alerts': p.alerts,
                 'monthly_summary': p.monthly_summary,
                 'recurring_bills': [
-                    {**b, 'name': apply_alias(b['name'])}
+                    {**b, 'normalized_name': b['name'], 'name': apply_alias(b['name'])}
                     for b in p.recurring_bills
                 ],
                 'income_patterns': p.income_patterns,
