@@ -496,6 +496,25 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
     analysis['monthly_summary']['avg_monthly_income'] = round(total_monthly_income, 2)
     analysis['monthly_summary']['avg_monthly_spend'] = round(total_monthly_expenses, 2)
 
+    # Plaid category display name mapping
+    PLAID_CATEGORY_MAP = {
+        'RENT_AND_UTILITIES': 'Rent & Utilities',
+        'LOAN_PAYMENTS': 'Loan Payments',
+        'GENERAL_MERCHANDISE': 'Shopping',
+        'GENERAL_SERVICES': 'Services',
+        'HOME_IMPROVEMENT': 'Home Improvement',
+        'TRANSFER_OUT': 'Transfers',
+        'BANK_FEES': 'Bank Fees',
+        'FOOD_AND_DRINK': 'Dining',
+        'TRANSPORTATION': 'Transport',
+        'ENTERTAINMENT': 'Entertainment',
+        'PERSONAL_CARE': 'Personal Care',
+        'MEDICAL': 'Healthcare',
+        'GOVERNMENT_AND_NON_PROFIT': 'Government',
+        'OTHER': 'Other',
+    }
+    INCOME_CATEGORIES = {'INCOME', 'TRANSFER_IN'}
+
     # Build name → Plaid category lookup from transactions
     name_to_plaid_cat = {}
     for t in transactions:
@@ -538,24 +557,6 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
     ]
 
     # Build spending categories from Plaid's transaction categories (not AI)
-    PLAID_CATEGORY_MAP = {
-        'RENT_AND_UTILITIES': 'Rent & Utilities',
-        'LOAN_PAYMENTS': 'Loan Payments',
-        'GENERAL_MERCHANDISE': 'Shopping',
-        'GENERAL_SERVICES': 'Services',
-        'HOME_IMPROVEMENT': 'Home Improvement',
-        'TRANSFER_OUT': 'Transfers',
-        'BANK_FEES': 'Bank Fees',
-        'FOOD_AND_DRINK': 'Dining',
-        'TRANSPORTATION': 'Transport',
-        'ENTERTAINMENT': 'Entertainment',
-        'PERSONAL_CARE': 'Personal Care',
-        'MEDICAL': 'Healthcare',
-        'GOVERNMENT_AND_NON_PROFIT': 'Government',
-        'OTHER': 'Other',
-    }
-    INCOME_CATEGORIES = {'INCOME', 'TRANSFER_IN'}
-
     # Query transactions for past ~30 days and build categories
     # Filter out internal transfers and excludable transactions
     from django.db.models import Sum
