@@ -783,40 +783,112 @@ def cashflow_predictions_api(request):
 
     predictions = CashFlowPrediction.objects.filter(home=membership.home)
 
-    # Get bill aliases for display name mapping
-    aliases = {
-        a.normalized_name: a.display_name
-        for a in BillAlias.objects.filter(home=membership.home)
-    }
+    # Get bill aliases for display name and category mapping
+    alias_objs = BillAlias.objects.filter(home=membership.home)
+    aliases = {a.normalized_name: a.display_name for a in alias_objs}
+    alias_categories = {a.normalized_name: a.category for a in alias_objs if a.category}
 
     def apply_alias(name):
         return aliases.get(name, name)
 
-    return JsonResponse({
-        'predictions': [
-            {
-                'id': p.id,
-                'week_start': str(p.week_start),
-                'week_end': str(p.week_end),
-                'predicted_spend': str(p.predicted_spend),
-                'predicted_income': str(p.predicted_income),
-                'estimated_end_balance': str(p.estimated_end_balance),
-                'risk_level': p.risk_level,
-                'bills_due': [
-                    {**b, 'name': apply_alias(b['name'])}
-                    for b in p.bills_due
-                ],
-                'alerts': p.alerts,
-                'monthly_summary': p.monthly_summary,
-                'recurring_bills': [
-                    {**b, 'normalized_name': b['name'], 'name': apply_alias(b['name'])}
-                    for b in p.recurring_bills
-                ],
-                'income_patterns': p.income_patterns,
-            }
-            for p in predictions
-        ]
-    })
+    # Build spending categories dynamically (so category edits reflect immediately)
+    from datetime import timedelta
+    from collections import defaultdict
+    thirty_days_ago = timezone.now().date() - timedelta(days=30)
+
+    PLAID_CATEGORY_MAP = {
+        'RENT_AND_UTILITIES': 'Rent & Utilities',
+        'LOAN_PAYMENTS': 'Loan Payments',
+        'GENERAL_MERCHANDISE': 'Shopping',
+        'GENERAL_SERVICES': 'Services',
+        'HOME_IMPROVEMENT': 'Home Improvement',
+        'TRANSFER_OUT': 'Transfers',
+        'BANK_FEES': 'Bank Fees',
+        'FOOD_AND_DRINK': 'Dining',
+        'TRANSPORTATION': 'Transport',
+        'ENTERTAINMENT': 'Entertainment',
+        'PERSONAL_CARE': 'Personal Care',
+        'MEDICAL': 'Healthcare',
+        'OTHER': 'Other',
+    }
+
+    import re
+    def _normalize(name, merchant=None):
+        if merchant and merchant.strip():
+            return merchant.strip()[:35]
+        cleaned = re.split(r'\bDES:|\bID:|\bConf#|\bfor "', name)[0]
+        cleaned = re.sub(r'^CHECKCARD\s*|^ACH HOLD\s*', '', cleaned)
+        cleaned = re.sub(r'\b\d{2}/?\d{2}\b', '', cleaned)
+        cleaned = re.sub(r'X{3,}\d*', '', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        return cleaned[:35] if cleaned else name[:35]
+
+    # Get institution names for internal transfer detection
+    inst_names = set()
+    for a in BankAccount.objects.filter(home=membership.home).values_list('institution_name', flat=True):
+        for word in a.upper().replace(',', '').replace('.', '').split():
+            if len(word) > 3:
+                inst_names.add(word)
+
+    cat_totals = defaultdict(float)
+    recent_txns = Transaction.objects.filter(
+        home=membership.home, amount__gt=0, date__gte=thirty_days_ago,
+    ).exclude(
+        personal_finance_category__in=['INCOME', 'TRANSFER_IN']
+    ).exclude(
+        personal_finance_category__isnull=True
+    ).values('name', 'merchant_name', 'amount', 'personal_finance_category')
+
+    for txn in recent_txns:
+        norm_upper = _normalize(txn['name']).upper().replace(',', '').replace('.', '')
+        if any(inst in norm_upper for inst in inst_names):
+            continue
+        norm = _normalize(txn['name'], txn.get('merchant_name'))
+        # Use alias category if set, otherwise Plaid's category
+        if norm in alias_categories:
+            cat = alias_categories[norm]
+        else:
+            pfc = txn['personal_finance_category']
+            cat = PLAID_CATEGORY_MAP.get(pfc, pfc.replace('_', ' ').title())
+        cat_totals[cat] += float(txn['amount'])
+
+    live_categories = [
+        {'category': c, 'amount': round(a, 2)}
+        for c, a in sorted(cat_totals.items(), key=lambda x: -x[1])
+        if a > 0
+    ]
+    live_spend = round(sum(c['amount'] for c in live_categories), 2)
+
+    # Build response with live spending data
+    result_predictions = []
+    for p in predictions:
+        summary = dict(p.monthly_summary)
+        if live_categories:
+            summary['top_categories'] = live_categories
+            summary['avg_monthly_spend'] = live_spend
+
+        result_predictions.append({
+            'id': p.id,
+            'week_start': str(p.week_start),
+            'week_end': str(p.week_end),
+            'predicted_spend': str(p.predicted_spend),
+            'predicted_income': str(p.predicted_income),
+            'estimated_end_balance': str(p.estimated_end_balance),
+            'risk_level': p.risk_level,
+            'bills_due': [
+                {**b, 'name': apply_alias(b['name'])}
+                for b in p.bills_due
+            ],
+            'alerts': p.alerts,
+            'monthly_summary': summary,
+            'recurring_bills': [
+                {**b, 'normalized_name': b['name'], 'name': apply_alias(b['name'])}
+                for b in p.recurring_bills
+            ],
+            'income_patterns': p.income_patterns,
+        })
+
+    return JsonResponse({'predictions': result_predictions})
 
 
 @csrf_exempt
