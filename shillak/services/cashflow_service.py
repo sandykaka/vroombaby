@@ -538,30 +538,35 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
     }
     INCOME_CATEGORIES = {'INCOME', 'TRANSFER_IN'}
 
-    # Query transactions grouped by Plaid category for past ~30 days
+    # Query transactions for past ~30 days and build categories
+    # Filter out internal transfers and excludable transactions
     from django.db.models import Sum
     thirty_days_ago = today - timedelta(days=30)
-    category_spend = (
-        Transaction.objects.filter(
-            home=home,
-            amount__gt=0,
-            date__gte=thirty_days_ago,
-        )
-        .exclude(personal_finance_category__in=INCOME_CATEGORIES)
-        .exclude(personal_finance_category__isnull=True)
-        .values('personal_finance_category')
-        .annotate(total=Sum('amount'))
-        .order_by('-total')
-    )
+    recent_txns = Transaction.objects.filter(
+        home=home,
+        amount__gt=0,
+        date__gte=thirty_days_ago,
+    ).exclude(
+        personal_finance_category__in=INCOME_CATEGORIES
+    ).exclude(
+        personal_finance_category__isnull=True
+    ).values('name', 'merchant_name', 'amount', 'personal_finance_category')
 
-    code_categories = []
-    for row in category_spend:
-        plaid_cat = row['personal_finance_category']
+    # Group by Plaid category, excluding internal transfers
+    from collections import defaultdict as dd
+    cat_totals = dd(float)
+    for txn in recent_txns:
+        if is_internal_transfer(txn['name']) or is_excludable(txn['name']):
+            continue
+        plaid_cat = txn['personal_finance_category']
         display = PLAID_CATEGORY_MAP.get(plaid_cat, plaid_cat.replace('_', ' ').title())
-        code_categories.append({
-            'category': display,
-            'amount': round(float(row['total']), 2),
-        })
+        cat_totals[display] += float(txn['amount'])
+
+    code_categories = [
+        {'category': cat, 'amount': round(amt, 2)}
+        for cat, amt in sorted(cat_totals.items(), key=lambda x: -x[1])
+        if amt > 0
+    ]
 
     # Apply user alias category overrides
     # If user assigned a category to a bill, move that bill's amount
@@ -574,20 +579,15 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
     }
 
     if alias_categories:
-        # Recalculate: get per-transaction data and apply overrides
-        from collections import defaultdict
-        adjusted_totals = defaultdict(float)
+        adjusted_totals = dd(float)
 
-        # Start with Plaid category totals
         for cat in code_categories:
             adjusted_totals[cat['category']] = cat['amount']
 
-        # For each aliased bill with a user category, move its amount
-        thirty_days_txns = Transaction.objects.filter(
-            home=home, amount__gt=0, date__gte=thirty_days_ago,
-        ).values('name', 'merchant_name', 'amount', 'personal_finance_category')
-
-        for txn in thirty_days_txns:
+        # Reuse recent_txns to apply alias category overrides
+        for txn in recent_txns:
+            if is_internal_transfer(txn['name']) or is_excludable(txn['name']):
+                continue
             txn_key = normalize_name(txn['name'], txn.get('merchant_name'))
             if txn_key in alias_categories:
                 user_cat = alias_categories[txn_key]
