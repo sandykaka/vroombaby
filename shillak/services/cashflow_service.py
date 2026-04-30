@@ -49,7 +49,101 @@ def sync_transactions(plaid_item):
         f"Synced {len(transactions)} transactions for {plaid_item.institution_name} "
         f"({created} new)"
     )
+
+    # Extract payee/merchant names for new transactions using AI
+    _extract_expense_groups(plaid_item.home)
+
     return len(transactions)
+
+
+def _extract_expense_groups(home):
+    """Use AI to extract payee/merchant from transaction names.
+    Only processes transactions that don't have expense_group set yet."""
+    ungrouped = Transaction.objects.filter(
+        home=home, expense_group__isnull=True
+    ).exclude(
+        expense_group__gt=''
+    ).values_list('id', 'name', 'merchant_name')
+
+    if not ungrouped:
+        return
+
+    # If Plaid already gave us merchant_name, use it directly — no AI needed
+    to_update_direct = []
+    needs_ai = []
+    for txn_id, name, merchant in ungrouped:
+        if merchant and merchant.strip():
+            to_update_direct.append((txn_id, merchant.strip()[:35]))
+        else:
+            needs_ai.append((txn_id, name))
+
+    # Batch update ones with merchant_name
+    for txn_id, group in to_update_direct:
+        Transaction.objects.filter(id=txn_id).update(expense_group=group)
+
+    if not needs_ai:
+        logger.info(f"All {len(to_update_direct)} transactions grouped via merchant_name")
+        return
+
+    # Send remaining to AI for entity extraction
+    from openai import OpenAI
+    from django.conf import settings
+
+    txn_list = [{'id': tid, 'name': name} for tid, name in needs_ai]
+
+    prompt = f"""Extract the payee, merchant, or recipient from each transaction name.
+Return a short, clean name (max 25 chars) that identifies WHO is being paid.
+
+Examples:
+- "Zelle Recurring payment to SENTHILKUMAR PALANISAMY Conf# abc" → "SENTHILKUMAR PALANISAMY"
+- "Zelle payment to SENTHILKUMAR PALAN for Mar rent" → "SENTHILKUMAR PALANISAMY"
+- "PNC MORTGAGE DES:PNC PYMT ID:XXXXX09385" → "PNC Mortgage"
+- "CHECKCARD 0405 TMOBILE AUTO P BELLEVUE WA" → "T-Mobile"
+- "AMERICAN EXPRESS DES:ACH PMT ID:A7314" → "American Express"
+- "CITI AUTOPAY DES:PAYMENT ID:XXXXX" → "Citi"
+- "DEPT EDUCATION DES:STUDENT LN ID:0000" → "Dept Education"
+- "APPLE INC. DES:PAYROLL ID:537093" → "Apple Inc"
+- "Venmo" → "Venmo"
+
+Return ONLY valid JSON: {{"results": [{{"id": 123, "payee": "Clean Name"}}]}}
+
+Transactions:
+{json.dumps(txn_list, indent=None)}"""
+
+    try:
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model='gpt-4o-mini',
+            messages=[
+                {'role': 'system', 'content': 'Extract payee names. Return only JSON.'},
+                {'role': 'user', 'content': prompt},
+            ],
+            temperature=0,
+            response_format={'type': 'json_object'},
+        )
+
+        result = json.loads(response.choices[0].message.content)
+        for item in result.get('results', []):
+            Transaction.objects.filter(id=item['id']).update(
+                expense_group=item['payee'][:35]
+            )
+
+        logger.info(
+            f"AI extracted {len(result.get('results', []))} payee names for {home.name}"
+        )
+
+    except Exception as e:
+        logger.error(f"AI entity extraction failed: {e}")
+        # Fallback: use the normalize function
+        for txn_id, name in needs_ai:
+            cleaned = re.split(r'\bDES:|\bID:|\bConf#|\bfor "', name)[0]
+            cleaned = re.sub(r'^CHECKCARD\s*|^ACH HOLD\s*', '', cleaned)
+            cleaned = re.sub(r'\b\d{2}/?\d{2}\b', '', cleaned)
+            cleaned = re.sub(r'X{3,}\d*', '', cleaned)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            Transaction.objects.filter(id=txn_id).update(
+                expense_group=cleaned[:35] if cleaned else name[:35]
+            )
 
 
 def analyze_cashflow(home, dry_run=False):
@@ -59,7 +153,7 @@ def analyze_cashflow(home, dry_run=False):
         home=home, pending=False
     ).order_by('date').values(
         'id', 'plaid_transaction_id', 'date', 'amount', 'name', 'merchant_name',
-        'category', 'personal_finance_category',
+        'category', 'personal_finance_category', 'expense_group',
     )
 
     if not transactions:
@@ -82,6 +176,7 @@ def analyze_cashflow(home, dry_run=False):
             'merchant': t['merchant_name'] or '',
             'plaid_id': t['plaid_transaction_id'],
             'db_id': t['id'],
+            'expense_group': t.get('expense_group') or '',
         })
 
     # Pre-analyze: group expenses and income by merchant
@@ -129,12 +224,14 @@ def analyze_cashflow(home, dry_run=False):
 
     expense_groups = defaultdict(list)
     income_groups = defaultdict(list)
-    txn_to_group = {}  # plaid_transaction_id → group_name
+    txn_to_group = {}
 
     for t in txn_data:
+        # Use expense_group from DB (set by AI entity extraction)
+        # Fall back to normalize_name if not set yet
+        key = t.get('expense_group') or normalize_name(t['name'], t.get('merchant'))
         if is_internal_transfer(t['name']) or is_excludable(t['name']):
             continue
-        key = normalize_name(t['name'], t.get('merchant'))
         txn_to_group[t.get('plaid_id', t['name'])] = key
         if t['amount'] > 0:
             expense_groups[key].append({'date': t['date'], 'amount': t['amount']})
