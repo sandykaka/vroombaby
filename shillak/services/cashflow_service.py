@@ -496,6 +496,23 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
     analysis['monthly_summary']['avg_monthly_income'] = round(total_monthly_income, 2)
     analysis['monthly_summary']['avg_monthly_spend'] = round(total_monthly_expenses, 2)
 
+    # Build name → Plaid category lookup from transactions
+    name_to_plaid_cat = {}
+    for t in transactions:
+        key = normalize_name(t['name'], t['merchant_name'])
+        pfc = t.get('personal_finance_category')
+        if pfc and key not in name_to_plaid_cat:
+            display = PLAID_CATEGORY_MAP.get(pfc, pfc.replace('_', ' ').title())
+            name_to_plaid_cat[key] = display
+
+    # Load user alias categories
+    from shillak.models import BillAlias
+    alias_cat_map = {
+        a.normalized_name: a.category
+        for a in BillAlias.objects.filter(home=home)
+        if a.category
+    }
+
     # Override recurring_bills with code-calculated data (AI misses some)
     analysis['recurring_bills'] = [
         {
@@ -504,6 +521,7 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
             'typical_day': exp['typical_day_of_month'],
             'frequency': exp.get('frequency', 'monthly'),
             'merchant': exp['name'],
+            'category': alias_cat_map.get(exp['name'], name_to_plaid_cat.get(exp['name'], '')),
         }
         for exp in expense_summary
     ]
