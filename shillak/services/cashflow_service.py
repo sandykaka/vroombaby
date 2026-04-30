@@ -58,7 +58,7 @@ def analyze_cashflow(home, dry_run=False):
     transactions = Transaction.objects.filter(
         home=home, pending=False
     ).order_by('date').values(
-        'date', 'amount', 'name', 'merchant_name',
+        'id', 'plaid_transaction_id', 'date', 'amount', 'name', 'merchant_name',
         'category', 'personal_finance_category',
     )
 
@@ -80,6 +80,8 @@ def analyze_cashflow(home, dry_run=False):
             'amount': float(t['amount']),
             'name': t['name'],
             'merchant': t['merchant_name'] or '',
+            'plaid_id': t['plaid_transaction_id'],
+            'db_id': t['id'],
         })
 
     # Pre-analyze: group expenses and income by merchant
@@ -127,10 +129,13 @@ def analyze_cashflow(home, dry_run=False):
 
     expense_groups = defaultdict(list)
     income_groups = defaultdict(list)
+    txn_to_group = {}  # plaid_transaction_id → group_name
+
     for t in txn_data:
         if is_internal_transfer(t['name']) or is_excludable(t['name']):
             continue
         key = normalize_name(t['name'], t.get('merchant'))
+        txn_to_group[t.get('plaid_id', t['name'])] = key
         if t['amount'] > 0:
             expense_groups[key].append({'date': t['date'], 'amount': t['amount']})
         elif t['amount'] < 0:
@@ -632,6 +637,13 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         analysis['monthly_summary']['avg_monthly_spend'] = round(
             sum(c['amount'] for c in code_categories), 2
         )
+
+    # Persist expense_group on each transaction so the spending chart
+    # can use the same grouping without re-normalizing
+    for t in txn_data:
+        group = txn_to_group.get(t.get('plaid_id', t['name']))
+        if group and t.get('db_id'):
+            Transaction.objects.filter(id=t['db_id']).update(expense_group=group)
 
     # Save predictions
     # Remember old alert state so we don't re-alert if balance unchanged

@@ -186,6 +186,7 @@ class Transaction(models.Model):
     merchant_name = models.CharField(max_length=255, blank=True, null=True)
     category = models.JSONField(blank=True, null=True)
     personal_finance_category = models.CharField(max_length=100, blank=True, null=True)
+    expense_group = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     pending = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 

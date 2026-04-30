@@ -812,43 +812,20 @@ def cashflow_predictions_api(request):
         'OTHER': 'Other',
     }
 
-    import re
-    def _normalize(name, merchant=None):
-        if merchant and merchant.strip():
-            return merchant.strip()[:35]
-        cleaned = re.split(r'\bDES:|\bID:|\bConf#|\bfor "', name)[0]
-        cleaned = re.sub(r'^CHECKCARD\s*|^ACH HOLD\s*', '', cleaned)
-        cleaned = re.sub(r'\b\d{2}/?\d{2}\b', '', cleaned)
-        cleaned = re.sub(r'X{3,}\d*', '', cleaned)
-        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-        return cleaned[:35] if cleaned else name[:35]
-
-    # Get institution names for internal transfer detection
-    inst_names = set()
-    for a in BankAccount.objects.filter(home=membership.home).values_list('institution_name', flat=True):
-        for word in a.upper().replace(',', '').replace('.', '').split():
-            if len(word) > 3:
-                inst_names.add(word)
-
     cat_totals = defaultdict(float)
     recent_txns = Transaction.objects.filter(
         home=membership.home, amount__gt=0, date__gte=thirty_days_ago,
+        expense_group__isnull=False,
     ).exclude(
         personal_finance_category__in=['INCOME', 'TRANSFER_IN']
-    ).exclude(
-        personal_finance_category__isnull=True
-    ).values('name', 'merchant_name', 'amount', 'personal_finance_category')
+    ).values('expense_group', 'amount', 'personal_finance_category')
 
     for txn in recent_txns:
-        norm_upper = _normalize(txn['name']).upper().replace(',', '').replace('.', '')
-        if any(inst in norm_upper for inst in inst_names):
-            continue
-        norm = _normalize(txn['name'], txn.get('merchant_name'))
-        # Use alias category if set, otherwise Plaid's category
-        if norm in alias_categories:
-            cat = alias_categories[norm]
+        group = txn['expense_group']
+        if group in alias_categories:
+            cat = alias_categories[group]
         else:
-            pfc = txn['personal_finance_category']
+            pfc = txn.get('personal_finance_category') or 'OTHER'
             cat = PLAID_CATEGORY_MAP.get(pfc, pfc.replace('_', ' ').title())
         cat_totals[cat] += float(txn['amount'])
 
