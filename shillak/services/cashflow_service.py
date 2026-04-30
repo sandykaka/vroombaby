@@ -86,24 +86,19 @@ def analyze_cashflow(home, dry_run=False):
     import re
     from collections import defaultdict
 
-    def normalize_name(name):
-        """Strip variable parts to group recurring transactions."""
-        # Remove everything after DES:, ID:, Conf#, for "
+    def normalize_name(name, merchant=None):
+        """Use Plaid's merchant_name if available, otherwise clean raw name."""
+        if merchant and merchant.strip():
+            return merchant.strip()[:35]
+        # Fall back to cleaning the raw transaction name
         cleaned = re.split(r'\bDES:', name)[0]
         cleaned = re.split(r'\bID:', cleaned)[0]
         cleaned = re.split(r'\bConf#', cleaned)[0]
         cleaned = re.split(r'\bfor "', cleaned)[0]
-        # Remove CHECKCARD prefix
         cleaned = re.sub(r'^CHECKCARD\s*', '', cleaned)
-        # Remove ACH HOLD prefix
         cleaned = re.sub(r'^ACH HOLD\s*', '', cleaned)
-        # Remove date patterns like 03/05, 0305, XX/XX
         cleaned = re.sub(r'\b\d{2}/?\d{2}\b', '', cleaned)
-        # Remove masked account numbers XXXXX01413 etc
         cleaned = re.sub(r'X{3,}\d*', '', cleaned)
-        # Remove location suffixes (BELLEVUE WA, New York NY etc)
-        cleaned = re.sub(r'\b[A-Z]{2}\s*$', '', cleaned)
-        # Collapse whitespace and trim
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         return cleaned[:35] if cleaned else name[:35]
 
@@ -119,16 +114,15 @@ def analyze_cashflow(home, dry_run=False):
     # Find institution names from linked accounts to detect internal transfers
     institution_names = set()
     for a in accounts:
-        inst = a['institution_name'].upper()
+        inst = a['institution_name'].upper().replace(',', '').replace('.', '')
         institution_names.add(inst)
-        # Also add common abbreviations
         for word in inst.split():
             if len(word) > 3:
                 institution_names.add(word)
 
     def is_internal_transfer(name):
         """Detect transfers between user's own accounts."""
-        normalized = normalize_name(name).upper()
+        normalized = normalize_name(name).upper().replace(',', '').replace('.', '')
         return any(inst in normalized for inst in institution_names)
 
     expense_groups = defaultdict(list)
@@ -136,7 +130,7 @@ def analyze_cashflow(home, dry_run=False):
     for t in txn_data:
         if is_internal_transfer(t['name']) or is_excludable(t['name']):
             continue
-        key = normalize_name(t['name'])
+        key = normalize_name(t['name'], t.get('merchant'))
         if t['amount'] > 0:
             expense_groups[key].append({'date': t['date'], 'amount': t['amount']})
         elif t['amount'] < 0:
@@ -197,25 +191,44 @@ def analyze_cashflow(home, dry_run=False):
 
     # Build expense summary — only include recurring (2+ occurrences)
     import statistics
+
+    def calc_typical_day(days, frequency):
+        """Calculate typical day based on frequency and actual payment dates."""
+        if not days:
+            return 1
+        if frequency in ('weekly', 'biweekly'):
+            # For weekly/biweekly, typical_day isn't meaningful
+            # Return the most recent day as reference
+            return days[-1]
+
+        # Monthly/quarterly: find the typical day of month
+        # Handle month-boundary bills (e.g. [30, 1, 31, 2, 30])
+        if max(days) - min(days) > 20:
+            # Spans month boundary — shift low days up by 31
+            adjusted = [d + 31 if d <= 5 else d for d in days]
+            result = round(statistics.median(adjusted))
+            return result if result <= 31 else result - 31
+        else:
+            return round(statistics.median(days))
+
     expense_summary = []
     total_monthly_expenses = 0
     for name, occurrences in sorted(expense_groups.items(), key=lambda x: -sum(o['amount'] for o in x[1])):
         if len(occurrences) < 2:
             continue
         amounts = [o['amount'] for o in occurrences]
-        # Use median to avoid outlier skew (e.g. one unusually large Amex payment)
         median_amt = statistics.median(amounts)
-        # Calculate consistency: low stdev = high confidence
         stdev = statistics.stdev(amounts) if len(amounts) > 1 else 0
         consistency = 'high' if stdev < median_amt * 0.1 else ('medium' if stdev < median_amt * 0.5 else 'low')
         days = [int(d.split('-')[2]) for d in [o['date'] for o in occurrences]]
         frequency = detect_frequency([o['date'] for o in occurrences])
+        typical_day = calc_typical_day(days, frequency)
         total_monthly_expenses += median_amt
         expense_summary.append({
             'name': name,
             'occurrences': len(occurrences),
             'avg_amount': round(median_amt, 2),
-            'typical_day_of_month': round(sum(days) / len(days)),
+            'typical_day_of_month': typical_day,
             'frequency': frequency,
             'confidence': consistency,
             'dates': [o['date'] for o in occurrences],
@@ -252,12 +265,13 @@ def analyze_cashflow(home, dry_run=False):
         consistency = 'high' if stdev < median_amt * 0.1 else ('medium' if stdev < median_amt * 0.5 else 'low')
         days = [int(d.split('-')[2]) for d in [o['date'] for o in occurrences]]
         frequency = detect_frequency([o['date'] for o in occurrences])
+        typical_day = calc_typical_day(days, frequency)
         total_monthly_income += median_amt
         income_summary.append({
             'name': name,
             'occurrences': len(occurrences),
             'avg_amount': round(median_amt, 2),
-            'typical_day_of_month': round(sum(days) / len(days)),
+            'typical_day_of_month': typical_day,
             'frequency': frequency,
             'confidence': consistency,
             'dates': [o['date'] for o in occurrences],
@@ -394,31 +408,41 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         week_start = monday + timedelta(weeks=week_num)
         week_end = week_start + timedelta(days=6)
 
-        # Find bills due this week based on typical_day
-        # If typical_day falls on weekend, shift to next Monday (banks skip weekends)
+        # Find bills due this week
         week_bills = []
         week_spend = 0
         for exp in expense_summary:
-            typical_day = exp['typical_day_of_month']
-            # Find the actual date this bill would land on this month
-            try:
-                bill_date = week_start.replace(day=typical_day)
-            except ValueError:
-                # Day doesn't exist this month (e.g. 31st in April)
-                import calendar
-                last_day = calendar.monthrange(week_start.year, week_start.month)[1]
-                bill_date = week_start.replace(day=min(typical_day, last_day))
+            freq = exp.get('frequency', 'monthly')
 
-            # Shift weekends and holidays to next business day
-            bill_date = next_business_day(bill_date)
+            if freq in ('weekly', 'biweekly'):
+                # Use interval projection from last known date
+                dates = sorted(exp['dates'])
+                if len(dates) >= 2:
+                    from datetime import datetime as dt
+                    parsed = [dt.strptime(d, '%Y-%m-%d').date() for d in dates]
+                    intervals = [(parsed[i+1] - parsed[i]).days for i in range(len(parsed)-1)]
+                    avg_interval = max(1, round(sum(intervals) / len(intervals)))
+                    next_date = parsed[-1] + timedelta(days=avg_interval)
+                    while next_date < week_start:
+                        next_date += timedelta(days=avg_interval)
+                    next_date = next_business_day(next_date)
+                    if week_start <= next_date <= week_end:
+                        week_bills.append({'name': exp['name'][:40], 'amount': exp['avg_amount']})
+                        week_spend += exp['avg_amount']
+            else:
+                # Monthly/quarterly: use typical_day_of_month
+                typical_day = exp['typical_day_of_month']
+                try:
+                    bill_date = week_start.replace(day=typical_day)
+                except ValueError:
+                    last_day = calendar.monthrange(week_start.year, week_start.month)[1]
+                    bill_date = week_start.replace(day=min(typical_day, last_day))
 
-            if week_start <= bill_date <= week_end:
-                avg_amt = exp['avg_amount']
-                week_bills.append({
-                    'name': exp['name'][:40],
-                    'amount': avg_amt,
-                })
-                week_spend += avg_amt
+                bill_date = next_business_day(bill_date)
+
+                if week_start <= bill_date <= week_end:
+                    week_bills.append({'name': exp['name'][:40], 'amount': exp['avg_amount']})
+                    week_spend += exp['avg_amount']
 
         # Find income this week
         # Detect frequency from actual date intervals, then project forward
@@ -494,6 +518,101 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         }
         for inc in income_summary
     ]
+
+    # Build spending categories from Plaid's transaction categories (not AI)
+    PLAID_CATEGORY_MAP = {
+        'RENT_AND_UTILITIES': 'Rent & Utilities',
+        'LOAN_PAYMENTS': 'Loan Payments',
+        'GENERAL_MERCHANDISE': 'Shopping',
+        'GENERAL_SERVICES': 'Services',
+        'HOME_IMPROVEMENT': 'Home Improvement',
+        'TRANSFER_OUT': 'Transfers',
+        'BANK_FEES': 'Bank Fees',
+        'FOOD_AND_DRINK': 'Dining',
+        'TRANSPORTATION': 'Transport',
+        'ENTERTAINMENT': 'Entertainment',
+        'PERSONAL_CARE': 'Personal Care',
+        'MEDICAL': 'Healthcare',
+        'GOVERNMENT_AND_NON_PROFIT': 'Government',
+        'OTHER': 'Other',
+    }
+    INCOME_CATEGORIES = {'INCOME', 'TRANSFER_IN'}
+
+    # Query transactions grouped by Plaid category for past ~30 days
+    from django.db.models import Sum
+    thirty_days_ago = today - timedelta(days=30)
+    category_spend = (
+        Transaction.objects.filter(
+            home=home,
+            amount__gt=0,
+            date__gte=thirty_days_ago,
+        )
+        .exclude(personal_finance_category__in=INCOME_CATEGORIES)
+        .exclude(personal_finance_category__isnull=True)
+        .values('personal_finance_category')
+        .annotate(total=Sum('amount'))
+        .order_by('-total')
+    )
+
+    code_categories = []
+    for row in category_spend:
+        plaid_cat = row['personal_finance_category']
+        display = PLAID_CATEGORY_MAP.get(plaid_cat, plaid_cat.replace('_', ' ').title())
+        code_categories.append({
+            'category': display,
+            'amount': round(float(row['total']), 2),
+        })
+
+    # Apply user alias category overrides
+    # If user assigned a category to a bill, move that bill's amount
+    # from Plaid's category to the user's chosen category
+    from shillak.models import BillAlias
+    alias_categories = {
+        a.normalized_name: a.category
+        for a in BillAlias.objects.filter(home=home)
+        if a.category
+    }
+
+    if alias_categories:
+        # Recalculate: get per-transaction data and apply overrides
+        from collections import defaultdict
+        adjusted_totals = defaultdict(float)
+
+        # Start with Plaid category totals
+        for cat in code_categories:
+            adjusted_totals[cat['category']] = cat['amount']
+
+        # For each aliased bill with a user category, move its amount
+        thirty_days_txns = Transaction.objects.filter(
+            home=home, amount__gt=0, date__gte=thirty_days_ago,
+        ).values('name', 'merchant_name', 'amount', 'personal_finance_category')
+
+        for txn in thirty_days_txns:
+            txn_key = normalize_name(txn['name'], txn.get('merchant_name'))
+            if txn_key in alias_categories:
+                user_cat = alias_categories[txn_key]
+                plaid_cat = txn.get('personal_finance_category', '')
+                plaid_display = PLAID_CATEGORY_MAP.get(
+                    plaid_cat, (plaid_cat or 'Other').replace('_', ' ').title()
+                )
+                amt = float(txn['amount'])
+                # Move from Plaid category to user category
+                if plaid_display in adjusted_totals:
+                    adjusted_totals[plaid_display] = max(0, adjusted_totals[plaid_display] - amt)
+                adjusted_totals[user_cat] = adjusted_totals.get(user_cat, 0) + amt
+
+        # Remove zero categories and rebuild
+        code_categories = [
+            {'category': cat, 'amount': round(amt, 2)}
+            for cat, amt in sorted(adjusted_totals.items(), key=lambda x: -x[1])
+            if amt > 0
+        ]
+
+    if code_categories:
+        analysis['monthly_summary']['top_categories'] = code_categories
+        analysis['monthly_summary']['avg_monthly_spend'] = round(
+            sum(c['amount'] for c in code_categories), 2
+        )
 
     # Save predictions
     # Remember old alert state so we don't re-alert if balance unchanged

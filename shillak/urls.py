@@ -38,6 +38,7 @@ urlpatterns = [
     path('api/cashflow/predictions/', views.cashflow_predictions_api, name='cashflow_predictions'),
     path('api/cashflow/analyze/', views.analyze_cashflow_api, name='analyze_cashflow'),
     path('api/cashflow/rename-bill/', views.rename_bill_api, name='rename_bill'),
+    path('api/cashflow/categories/', views.available_categories_api, name='available_categories'),
     path('api/transactions/', views.transactions_api, name='transactions'),
 
     # Static pages

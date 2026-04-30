@@ -228,12 +228,13 @@ class CashFlowPrediction(models.Model):
 
 
 class BillAlias(models.Model):
-    """User-defined display name for a recurring bill."""
+    """User-defined display name and category for a recurring bill."""
     home = models.ForeignKey(
         Home, on_delete=models.CASCADE, related_name='bill_aliases'
     )
     normalized_name = models.CharField(max_length=100)
     display_name = models.CharField(max_length=100)
+    category = models.CharField(max_length=100, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

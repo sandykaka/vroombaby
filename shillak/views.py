@@ -866,6 +866,7 @@ def rename_bill_api(request):
 
     normalized_name = data.get('normalized_name', '').strip()
     display_name = data.get('display_name', '').strip()
+    category = data.get('category', '').strip()
 
     if not normalized_name or not display_name:
         return JsonResponse({'error': 'Missing normalized_name or display_name'}, status=400)
@@ -874,17 +875,59 @@ def rename_bill_api(request):
     if not membership:
         return JsonResponse({'error': 'Not in a home'}, status=400)
 
+    defaults = {'display_name': display_name}
+    if category:
+        defaults['category'] = category
+
     alias, created = BillAlias.objects.update_or_create(
         home=membership.home,
         normalized_name=normalized_name,
-        defaults={'display_name': display_name},
+        defaults=defaults,
     )
 
     return JsonResponse({
         'status': 'updated',
         'normalized_name': alias.normalized_name,
         'display_name': alias.display_name,
+        'category': alias.category,
     })
+
+
+@require_firebase_auth
+def available_categories_api(request):
+    """Get categories from user's actual Plaid transaction data."""
+    membership = HomeMember.objects.filter(user=request.user).first()
+    if not membership:
+        return JsonResponse({'categories': []})
+
+    PLAID_CATEGORY_MAP = {
+        'RENT_AND_UTILITIES': 'Rent & Utilities',
+        'LOAN_PAYMENTS': 'Loan Payments',
+        'GENERAL_MERCHANDISE': 'Shopping',
+        'GENERAL_SERVICES': 'Services',
+        'HOME_IMPROVEMENT': 'Home Improvement',
+        'TRANSFER_OUT': 'Transfers',
+        'BANK_FEES': 'Bank Fees',
+        'FOOD_AND_DRINK': 'Dining',
+        'TRANSPORTATION': 'Transport',
+        'ENTERTAINMENT': 'Entertainment',
+        'PERSONAL_CARE': 'Personal Care',
+        'MEDICAL': 'Healthcare',
+        'OTHER': 'Other',
+    }
+
+    raw_cats = Transaction.objects.filter(
+        home=membership.home,
+        personal_finance_category__isnull=False,
+    ).values_list('personal_finance_category', flat=True).distinct()
+
+    categories = []
+    for cat in raw_cats:
+        if cat and cat not in ('INCOME', 'TRANSFER_IN'):
+            display = PLAID_CATEGORY_MAP.get(cat, cat.replace('_', ' ').title())
+            categories.append(display)
+
+    return JsonResponse({'categories': sorted(set(categories))})
 
 
 @require_firebase_auth
