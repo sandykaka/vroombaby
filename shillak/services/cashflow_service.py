@@ -145,6 +145,96 @@ Transactions:
                 expense_group=cleaned[:35] if cleaned else name[:35]
             )
 
+    # Deduplicate similar group names (e.g. "JONG HO YOU" and "JONG YOU")
+    _dedup_expense_groups(home)
+
+
+def _dedup_expense_groups(home):
+    """Merge similar expense_group names that likely refer to the same payee.
+    Uses name similarity + transaction pattern matching (timing, amounts, direction)."""
+    from difflib import SequenceMatcher
+
+    groups = list(
+        Transaction.objects.filter(home=home, expense_group__isnull=False)
+        .exclude(expense_group='')
+        .values_list('expense_group', flat=True)
+        .distinct()
+    )
+
+    if len(groups) < 2:
+        return
+
+    # Build profile for each group
+    group_profiles = {}
+    for g in groups:
+        txns = Transaction.objects.filter(home=home, expense_group=g)
+        amounts = [float(t.amount) for t in txns]
+        days = [t.date.day for t in txns]
+        # Direction: mostly positive (expense) or mostly negative (income)
+        positive_count = sum(1 for a in amounts if a > 0)
+        direction = 'expense' if positive_count > len(amounts) / 2 else 'income'
+        group_profiles[g] = {
+            'count': len(amounts),
+            'median_amount': sorted([abs(a) for a in amounts])[len(amounts) // 2] if amounts else 0,
+            'typical_day': round(sum(days) / len(days)) if days else 0,
+            'direction': direction,
+        }
+
+    # Find pairs to merge
+    merges = {}
+    processed = set()
+
+    for i, g1 in enumerate(groups):
+        if g1 in processed:
+            continue
+        for g2 in groups[i + 1:]:
+            if g2 in processed:
+                continue
+
+            p1 = group_profiles[g1]
+            p2 = group_profiles[g2]
+
+            # Must have same direction (both expenses or both income)
+            if p1['direction'] != p2['direction']:
+                continue
+
+            # Name similarity
+            name_sim = SequenceMatcher(None, g1.upper(), g2.upper()).ratio()
+            if name_sim < 0.5:
+                continue
+
+            containment = g1.upper() in g2.upper() or g2.upper() in g1.upper()
+
+            # Amount similarity (within 50%)
+            if p1['median_amount'] > 0 and p2['median_amount'] > 0:
+                ratio = min(p1['median_amount'], p2['median_amount']) / max(p1['median_amount'], p2['median_amount'])
+                amount_similar = ratio > 0.5
+            else:
+                amount_similar = True
+
+            # Day similarity (within 5 days)
+            day_similar = abs(p1['typical_day'] - p2['typical_day']) <= 5
+
+            should_merge = (
+                name_sim >= 0.8 or
+                (containment and (amount_similar or day_similar)) or
+                (name_sim >= 0.6 and amount_similar and day_similar)
+            )
+
+            if should_merge:
+                canonical = g1 if len(g1) >= len(g2) else g2
+                shorter = g2 if canonical == g1 else g1
+                merges[shorter] = canonical
+                processed.add(shorter)
+                logger.info(f"Dedup: '{shorter}' → '{canonical}' (sim={name_sim:.2f})")
+
+    for old_name, new_name in merges.items():
+        count = Transaction.objects.filter(
+            home=home, expense_group=old_name
+        ).update(expense_group=new_name)
+        if count:
+            logger.info(f"Merged {count} transactions: '{old_name}' → '{new_name}'")
+
 
 def analyze_cashflow(home, dry_run=False):
     """Analyze transaction history with OpenAI and generate predictions."""
