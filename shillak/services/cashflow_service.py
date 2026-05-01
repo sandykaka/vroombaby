@@ -624,8 +624,6 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         return None
 
     # Override weekly predictions with code-calculated values
-    # (AI is unreliable at mapping bills to specific weeks)
-    from datetime import timedelta
     import calendar
     import holidays
 
