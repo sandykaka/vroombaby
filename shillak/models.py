@@ -236,6 +236,8 @@ class BillAlias(models.Model):
     normalized_name = models.CharField(max_length=100)
     display_name = models.CharField(max_length=100)
     category = models.CharField(max_length=100, blank=True, default='')
+    hidden = models.BooleanField(default=False)
+    hidden_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

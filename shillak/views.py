@@ -787,6 +787,7 @@ def cashflow_predictions_api(request):
     alias_objs = BillAlias.objects.filter(home=membership.home)
     aliases = {a.normalized_name: a.display_name for a in alias_objs}
     alias_categories = {a.normalized_name: a.category for a in alias_objs if a.category}
+    hidden_groups = {a.normalized_name for a in alias_objs if a.hidden}
 
     def apply_alias(name):
         return aliases.get(name, name)
@@ -866,6 +867,7 @@ def cashflow_predictions_api(request):
                     'category': alias_categories.get(b['name'], b.get('category', '')),
                 }
                 for b in p.recurring_bills
+                if b['name'] not in hidden_groups
             ],
             'income_patterns': p.income_patterns,
         })
@@ -921,17 +923,27 @@ def rename_bill_api(request):
     normalized_name = data.get('normalized_name', '').strip()
     display_name = data.get('display_name', '').strip()
     category = data.get('category', '').strip()
+    hidden = data.get('hidden')
 
-    if not normalized_name or not display_name:
-        return JsonResponse({'error': 'Missing normalized_name or display_name'}, status=400)
+    if not normalized_name:
+        return JsonResponse({'error': 'Missing normalized_name'}, status=400)
+
+    # Allow hide without requiring display_name
+    if not display_name and hidden is None:
+        return JsonResponse({'error': 'Missing display_name'}, status=400)
 
     membership = HomeMember.objects.filter(user=request.user).first()
     if not membership:
         return JsonResponse({'error': 'Not in a home'}, status=400)
 
-    defaults = {'display_name': display_name}
+    defaults = {}
+    if display_name:
+        defaults['display_name'] = display_name
     if category:
         defaults['category'] = category
+    if hidden is not None:
+        defaults['hidden'] = hidden
+        defaults['hidden_at'] = timezone.now() if hidden else None
 
     alias, created = BillAlias.objects.update_or_create(
         home=membership.home,
@@ -944,6 +956,90 @@ def rename_bill_api(request):
         'normalized_name': alias.normalized_name,
         'display_name': alias.display_name,
         'category': alias.category,
+    })
+
+
+@require_firebase_auth
+def monthly_spending_api(request):
+    """Get spending breakdown for a specific month."""
+    membership = HomeMember.objects.filter(user=request.user).first()
+    if not membership:
+        return JsonResponse({'categories': [], 'income': 0, 'spending': 0})
+
+    # Parse month param (default: current month)
+    import calendar
+    month_str = request.GET.get('month', '')
+    if month_str:
+        try:
+            year, month = int(month_str[:4]), int(month_str[5:7])
+        except (ValueError, IndexError):
+            year, month = timezone.now().year, timezone.now().month
+    else:
+        year, month = timezone.now().year, timezone.now().month
+
+    from datetime import date
+    first_day = date(year, month, 1)
+    last_day = date(year, month, calendar.monthrange(year, month)[1])
+
+    PLAID_CATEGORY_MAP = {
+        'RENT_AND_UTILITIES': 'Rent & Utilities',
+        'LOAN_PAYMENTS': 'Loan Payments',
+        'GENERAL_MERCHANDISE': 'Shopping',
+        'GENERAL_SERVICES': 'Services',
+        'HOME_IMPROVEMENT': 'Home Improvement',
+        'TRANSFER_OUT': 'Transfers',
+        'BANK_FEES': 'Bank Fees',
+        'FOOD_AND_DRINK': 'Dining',
+        'TRANSPORTATION': 'Transport',
+        'ENTERTAINMENT': 'Entertainment',
+        'PERSONAL_CARE': 'Personal Care',
+        'MEDICAL': 'Healthcare',
+        'OTHER': 'Other',
+    }
+
+    alias_objs = BillAlias.objects.filter(home=membership.home)
+    alias_categories = {a.normalized_name: a.category for a in alias_objs if a.category}
+    hidden_groups = {a.normalized_name for a in alias_objs if a.hidden}
+
+    from collections import defaultdict
+    cat_totals = defaultdict(float)
+    total_income = 0
+
+    txns = Transaction.objects.filter(
+        home=membership.home,
+        date__gte=first_day,
+        date__lte=last_day,
+        expense_group__isnull=False,
+    ).values('expense_group', 'amount', 'personal_finance_category')
+
+    for txn in txns:
+        group = txn['expense_group']
+        if group in hidden_groups:
+            continue
+        pfc = txn.get('personal_finance_category') or 'OTHER'
+
+        if txn['amount'] < 0 or pfc in ('INCOME', 'TRANSFER_IN'):
+            total_income += abs(float(txn['amount']))
+        elif txn['amount'] > 0:
+            if group in alias_categories:
+                cat = alias_categories[group]
+            else:
+                cat = PLAID_CATEGORY_MAP.get(pfc, pfc.replace('_', ' ').title())
+            cat_totals[cat] += float(txn['amount'])
+
+    categories = [
+        {'category': c, 'amount': round(a, 2)}
+        for c, a in sorted(cat_totals.items(), key=lambda x: -x[1])
+        if a > 0
+    ]
+    total_spend = round(sum(c['amount'] for c in categories), 2)
+
+    return JsonResponse({
+        'month': f"{year}-{month:02d}",
+        'income': round(total_income, 2),
+        'spending': total_spend,
+        'saved': round(total_income - total_spend, 2),
+        'categories': categories,
     })
 
 

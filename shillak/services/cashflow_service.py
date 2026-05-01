@@ -403,19 +403,63 @@ def analyze_cashflow(home, dry_run=False):
         else:
             return round(statistics.median(days))
 
+    # Load hidden bills
+    from shillak.models import BillAlias
+    hidden_groups = set(
+        BillAlias.objects.filter(home=home, hidden=True)
+        .values_list('normalized_name', flat=True)
+    )
+
+    # Auto-reset hidden bills older than 90 days
+    ninety_days_ago = today - timedelta(days=90)
+    BillAlias.objects.filter(
+        home=home, hidden=True, hidden_at__lt=ninety_days_ago
+    ).update(hidden=False, hidden_at=None)
+
+    # Auto-unhide bills that have new transactions after hidden_at
+    for alias in BillAlias.objects.filter(home=home, hidden=True, hidden_at__isnull=False):
+        latest_txn = Transaction.objects.filter(
+            home=home, expense_group=alias.normalized_name
+        ).order_by('-date').first()
+        if latest_txn and latest_txn.date > alias.hidden_at.date():
+            alias.hidden = False
+            alias.hidden_at = None
+            alias.save(update_fields=['hidden', 'hidden_at'])
+            hidden_groups.discard(alias.normalized_name)
+            logger.info(f"Auto-unhidden bill: {alias.normalized_name}")
+
+    INTERVAL_DAYS = {'weekly': 7, 'biweekly': 14, 'monthly': 30, 'quarterly': 90, 'annual': 365}
+
     expense_summary = []
     total_monthly_expenses = 0
     for name, occurrences in sorted(expense_groups.items(), key=lambda x: -sum(o['amount'] for o in x[1])):
         if len(occurrences) < 2:
             continue
+        if name in hidden_groups:
+            continue
+
         amounts = [o['amount'] for o in occurrences]
         median_amt = statistics.median(amounts)
         stdev = statistics.stdev(amounts) if len(amounts) > 1 else 0
         consistency = 'high' if stdev < median_amt * 0.1 else ('medium' if stdev < median_amt * 0.5 else 'low')
-        days = [int(d.split('-')[2]) for d in [o['date'] for o in occurrences]]
-        frequency = detect_frequency([o['date'] for o in occurrences])
+        dates_list = [o['date'] for o in occurrences]
+        days = [int(d.split('-')[2]) for d in dates_list]
+        frequency = detect_frequency(dates_list)
         typical_day = calc_typical_day(days, frequency)
-        total_monthly_expenses += median_amt
+
+        # Calculate bill status
+        last_date = max(dates_list)
+        days_since = (today - date.fromisoformat(last_date)).days
+        expected_interval = INTERVAL_DAYS.get(frequency, 30)
+        if days_since <= expected_interval * 1.5:
+            status = 'active'
+        else:
+            status = 'inactive'
+
+        # Only include active bills in spending total and predictions
+        if status == 'active':
+            total_monthly_expenses += median_amt
+
         expense_summary.append({
             'name': name,
             'occurrences': len(occurrences),
@@ -423,7 +467,9 @@ def analyze_cashflow(home, dry_run=False):
             'typical_day_of_month': typical_day,
             'frequency': frequency,
             'confidence': consistency,
-            'dates': [o['date'] for o in occurrences],
+            'status': status,
+            'last_paid': last_date,
+            'dates': dates_list,
             'amounts': [o['amount'] for o in occurrences],
         })
 
@@ -600,10 +646,12 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         week_start = monday + timedelta(weeks=week_num)
         week_end = week_start + timedelta(days=6)
 
-        # Find bills due this week
+        # Find bills due this week (only active bills)
         week_bills = []
         week_spend = 0
         for exp in expense_summary:
+            if exp.get('status') != 'active':
+                continue
             freq = exp.get('frequency', 'monthly')
 
             if freq in ('weekly', 'biweekly'):
@@ -724,7 +772,7 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         if a.category
     }
 
-    # Override recurring_bills with code-calculated data (AI misses some)
+    # Override recurring_bills with code-calculated data
     analysis['recurring_bills'] = [
         {
             'name': exp['name'],
@@ -733,6 +781,8 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
             'frequency': exp.get('frequency', 'monthly'),
             'merchant': exp['name'],
             'category': alias_cat_map.get(exp['name'], name_to_plaid_cat.get(exp['name'], '')),
+            'status': exp.get('status', 'active'),
+            'last_paid': exp.get('last_paid', ''),
         }
         for exp in expense_summary
     ]
