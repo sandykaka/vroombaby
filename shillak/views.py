@@ -816,7 +816,7 @@ def cashflow_predictions_api(request):
     cat_totals = defaultdict(float)
     recent_txns = Transaction.objects.filter(
         home=membership.home, amount__gt=0, date__gte=thirty_days_ago,
-        expense_group__isnull=False,
+        expense_group__isnull=False, pending=False,
     ).exclude(
         personal_finance_category__in=['INCOME', 'TRANSFER_IN']
     ).values('expense_group', 'amount', 'personal_finance_category')
@@ -1010,6 +1010,7 @@ def monthly_spending_api(request):
         date__gte=first_day,
         date__lte=last_day,
         expense_group__isnull=False,
+        pending=False,
     ).values('expense_group', 'amount', 'personal_finance_category')
 
     for txn in txns:
