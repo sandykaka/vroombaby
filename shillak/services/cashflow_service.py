@@ -403,6 +403,8 @@ def analyze_cashflow(home, dry_run=False):
         else:
             return round(statistics.median(days))
 
+    today = date.today()
+
     # Load hidden bills
     from shillak.models import BillAlias
     hidden_groups = set(
@@ -527,7 +529,6 @@ def analyze_cashflow(home, dry_run=False):
         })
 
     current_total_balance = sum(b['balance'] for b in balance_data)
-    today = date.today()
 
     prompt = f"""You are a personal finance analyst. Based on the pre-analyzed transaction
 data below, predict this user's cash flow for the next 4 weeks.
