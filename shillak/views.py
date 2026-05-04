@@ -1002,18 +1002,42 @@ def monthly_spending_api(request):
     hidden_groups = {a.normalized_name for a in alias_objs if a.hidden}
 
     from collections import defaultdict
-    cat_totals = defaultdict(float)
-    total_income = 0
-
-    txns = Transaction.objects.filter(
+    # Detect internal transfers: opposite transactions across accounts in same Home
+    # Same absolute amount, opposite signs, within 3 days, different accounts,
+    # at least one side categorized as TRANSFER_IN or TRANSFER_OUT
+    from datetime import timedelta as td
+    txns_list = list(Transaction.objects.filter(
         home=membership.home,
         date__gte=first_day,
         date__lte=last_day,
         expense_group__isnull=False,
         pending=False,
-    ).values('expense_group', 'amount', 'personal_finance_category')
+    ).values('id', 'expense_group', 'amount', 'date', 'bank_account_id', 'personal_finance_category'))
 
-    for txn in txns:
+    TRANSFER_CATEGORIES = {'TRANSFER_IN', 'TRANSFER_OUT'}
+    internal_transfer_ids = set()
+
+    for i, t1 in enumerate(txns_list):
+        if t1['id'] in internal_transfer_ids:
+            continue
+        for t2 in txns_list[i + 1:]:
+            if t2['id'] in internal_transfer_ids:
+                continue
+            if (t1['bank_account_id'] != t2['bank_account_id']
+                    and abs(float(t1['amount']) + float(t2['amount'])) < 0.01
+                    and abs((t1['date'] - t2['date']).days) <= 3
+                    and (t1.get('personal_finance_category') in TRANSFER_CATEGORIES
+                         or t2.get('personal_finance_category') in TRANSFER_CATEGORIES)):
+                internal_transfer_ids.add(t1['id'])
+                internal_transfer_ids.add(t2['id'])
+                break
+
+    cat_totals = defaultdict(float)
+    total_income = 0
+
+    for txn in txns_list:
+        if txn['id'] in internal_transfer_ids:
+            continue
         group = txn['expense_group']
         if group in hidden_groups:
             continue
