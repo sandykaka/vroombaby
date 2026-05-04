@@ -292,7 +292,7 @@ def analyze_cashflow(home, dry_run=False):
     # Detect internal transfers: transactions that appear as both positive AND negative
     # with similar amounts (e.g. $3,000 out of BofA = $3,000 into Capital One)
     # Also filter out bank fees and interest
-    EXCLUDE_PATTERNS = {'Monthly Interest Paid', 'OVERDRAFT', 'INTEREST', 'FEE FOR ACTIVITY'}
+    EXCLUDE_PATTERNS = {'OVERDRAFT', 'FEE FOR ACTIVITY'}
 
     def is_excludable(name):
         normalized = normalize_name(name).upper()
