@@ -40,6 +40,7 @@ urlpatterns = [
     path('api/cashflow/rename-bill/', views.rename_bill_api, name='rename_bill'),
     path('api/cashflow/categories/', views.available_categories_api, name='available_categories'),
     path('api/cashflow/spending/', views.monthly_spending_api, name='monthly_spending'),
+    path('api/cashflow/category-detail/', views.category_detail_api, name='category_detail'),
     path('api/transactions/', views.transactions_api, name='transactions'),
 
     # Static pages

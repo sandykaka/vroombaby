@@ -9,6 +9,7 @@ from django.views.decorators.csrf import csrf_exempt
 from .decorators import require_firebase_auth
 from .models import BankAccount, BillAlias, CashFlowPrediction, Home, HomeMember, PlaidItem, Transaction, TransferRequest, UserProfile
 from .services import plaid_service
+from .services import format_plaid_category
 from .services.notification_service import NotificationService
 from .services import cashflow_service
 
@@ -797,22 +798,6 @@ def cashflow_predictions_api(request):
     from collections import defaultdict
     thirty_days_ago = timezone.now().date() - timedelta(days=30)
 
-    PLAID_CATEGORY_MAP = {
-        'RENT_AND_UTILITIES': 'Rent & Utilities',
-        'LOAN_PAYMENTS': 'Loan Payments',
-        'GENERAL_MERCHANDISE': 'Shopping',
-        'GENERAL_SERVICES': 'Services',
-        'HOME_IMPROVEMENT': 'Home Improvement',
-        'TRANSFER_OUT': 'Transfers',
-        'BANK_FEES': 'Bank Fees',
-        'FOOD_AND_DRINK': 'Dining',
-        'TRANSPORTATION': 'Transport',
-        'ENTERTAINMENT': 'Entertainment',
-        'PERSONAL_CARE': 'Personal Care',
-        'MEDICAL': 'Healthcare',
-        'OTHER': 'Other',
-    }
-
     cat_totals = defaultdict(float)
     recent_txns = Transaction.objects.filter(
         home=membership.home, amount__gt=0, date__gte=thirty_days_ago,
@@ -827,7 +812,7 @@ def cashflow_predictions_api(request):
             cat = alias_categories[group]
         else:
             pfc = txn.get('personal_finance_category') or 'OTHER'
-            cat = PLAID_CATEGORY_MAP.get(pfc, pfc.replace('_', ' ').title())
+            cat = format_plaid_category(pfc)
         cat_totals[cat] += float(txn['amount'])
 
     live_categories = [
@@ -981,22 +966,6 @@ def monthly_spending_api(request):
     first_day = date(year, month, 1)
     last_day = date(year, month, calendar.monthrange(year, month)[1])
 
-    PLAID_CATEGORY_MAP = {
-        'RENT_AND_UTILITIES': 'Rent & Utilities',
-        'LOAN_PAYMENTS': 'Loan Payments',
-        'GENERAL_MERCHANDISE': 'Shopping',
-        'GENERAL_SERVICES': 'Services',
-        'HOME_IMPROVEMENT': 'Home Improvement',
-        'TRANSFER_OUT': 'Transfers',
-        'BANK_FEES': 'Bank Fees',
-        'FOOD_AND_DRINK': 'Dining',
-        'TRANSPORTATION': 'Transport',
-        'ENTERTAINMENT': 'Entertainment',
-        'PERSONAL_CARE': 'Personal Care',
-        'MEDICAL': 'Healthcare',
-        'OTHER': 'Other',
-    }
-
     alias_objs = BillAlias.objects.filter(home=membership.home)
     alias_categories = {a.normalized_name: a.category for a in alias_objs if a.category}
     hidden_groups = {a.normalized_name for a in alias_objs if a.hidden}
@@ -1049,7 +1018,7 @@ def monthly_spending_api(request):
             if group in alias_categories:
                 cat = alias_categories[group]
             else:
-                cat = PLAID_CATEGORY_MAP.get(pfc, pfc.replace('_', ' ').title())
+                cat = format_plaid_category(pfc)
             cat_totals[cat] += float(txn['amount'])
 
     categories = [
@@ -1075,22 +1044,6 @@ def available_categories_api(request):
     if not membership:
         return JsonResponse({'categories': []})
 
-    PLAID_CATEGORY_MAP = {
-        'RENT_AND_UTILITIES': 'Rent & Utilities',
-        'LOAN_PAYMENTS': 'Loan Payments',
-        'GENERAL_MERCHANDISE': 'Shopping',
-        'GENERAL_SERVICES': 'Services',
-        'HOME_IMPROVEMENT': 'Home Improvement',
-        'TRANSFER_OUT': 'Transfers',
-        'BANK_FEES': 'Bank Fees',
-        'FOOD_AND_DRINK': 'Dining',
-        'TRANSPORTATION': 'Transport',
-        'ENTERTAINMENT': 'Entertainment',
-        'PERSONAL_CARE': 'Personal Care',
-        'MEDICAL': 'Healthcare',
-        'OTHER': 'Other',
-    }
-
     raw_cats = Transaction.objects.filter(
         home=membership.home,
         personal_finance_category__isnull=False,
@@ -1099,10 +1052,72 @@ def available_categories_api(request):
     categories = []
     for cat in raw_cats:
         if cat and cat not in ('INCOME', 'TRANSFER_IN'):
-            display = PLAID_CATEGORY_MAP.get(cat, cat.replace('_', ' ').title())
+            display = format_plaid_category(cat)
             categories.append(display)
 
     return JsonResponse({'categories': sorted(set(categories))})
+
+
+@require_firebase_auth
+def category_detail_api(request):
+    """Get individual transactions for a specific category in a month."""
+    membership = HomeMember.objects.filter(user=request.user).first()
+    if not membership:
+        return JsonResponse({'transactions': []})
+
+    import calendar
+    month_str = request.GET.get('month', '')
+    category_name = request.GET.get('category', '')
+
+    if not category_name:
+        return JsonResponse({'transactions': []})
+
+    if month_str:
+        try:
+            year, month = int(month_str[:4]), int(month_str[5:7])
+        except (ValueError, IndexError):
+            year, month = timezone.now().year, timezone.now().month
+    else:
+        year, month = timezone.now().year, timezone.now().month
+
+    from datetime import date
+    first_day = date(year, month, 1)
+    last_day = date(year, month, calendar.monthrange(year, month)[1])
+
+    alias_objs = BillAlias.objects.filter(home=membership.home)
+    alias_categories = {a.normalized_name: a.category for a in alias_objs if a.category}
+    aliases = {a.normalized_name: a.display_name for a in alias_objs}
+
+    txns = Transaction.objects.filter(
+        home=membership.home,
+        date__gte=first_day,
+        date__lte=last_day,
+        expense_group__isnull=False,
+        pending=False,
+        amount__gt=0,
+    ).order_by('-date')
+
+    result = []
+    for t in txns:
+        group = t.expense_group
+        if group in alias_categories:
+            cat = alias_categories[group]
+        else:
+            pfc = t.personal_finance_category or 'OTHER'
+            cat = format_plaid_category(pfc)
+
+        if cat == category_name:
+            result.append({
+                'date': str(t.date),
+                'amount': str(t.amount),
+                'name': aliases.get(group, group),
+            })
+
+    return JsonResponse({
+        'transactions': result,
+        'category': category_name,
+        'total': str(sum(float(r['amount']) for r in result)),
+    })
 
 
 @require_firebase_auth

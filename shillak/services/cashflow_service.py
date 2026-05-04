@@ -11,6 +11,7 @@ from shillak.models import (
     BankAccount, CashFlowPrediction, Home, HomeMember, PlaidItem, Transaction,
 )
 from shillak.services import plaid_service
+from shillak.services import format_plaid_category
 from shillak.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
@@ -735,23 +736,6 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
     analysis['monthly_summary']['avg_monthly_income'] = round(total_monthly_income, 2)
     analysis['monthly_summary']['avg_monthly_spend'] = round(total_monthly_expenses, 2)
 
-    # Plaid category display name mapping
-    PLAID_CATEGORY_MAP = {
-        'RENT_AND_UTILITIES': 'Rent & Utilities',
-        'LOAN_PAYMENTS': 'Loan Payments',
-        'GENERAL_MERCHANDISE': 'Shopping',
-        'GENERAL_SERVICES': 'Services',
-        'HOME_IMPROVEMENT': 'Home Improvement',
-        'TRANSFER_OUT': 'Transfers',
-        'BANK_FEES': 'Bank Fees',
-        'FOOD_AND_DRINK': 'Dining',
-        'TRANSPORTATION': 'Transport',
-        'ENTERTAINMENT': 'Entertainment',
-        'PERSONAL_CARE': 'Personal Care',
-        'MEDICAL': 'Healthcare',
-        'GOVERNMENT_AND_NON_PROFIT': 'Government',
-        'OTHER': 'Other',
-    }
     INCOME_CATEGORIES = {'INCOME', 'TRANSFER_IN'}
 
     # Build name → Plaid category lookup from transactions
@@ -760,7 +744,7 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         key = normalize_name(t['name'], t['merchant_name'])
         pfc = t.get('personal_finance_category')
         if pfc and key not in name_to_plaid_cat:
-            display = PLAID_CATEGORY_MAP.get(pfc, pfc.replace('_', ' ').title())
+            display = format_plaid_category(pfc)
             name_to_plaid_cat[key] = display
 
     # Load user alias categories
@@ -819,7 +803,7 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         if is_internal_transfer(txn['name']) or is_excludable(txn['name']):
             continue
         plaid_cat = txn['personal_finance_category']
-        display = PLAID_CATEGORY_MAP.get(plaid_cat, plaid_cat.replace('_', ' ').title())
+        display = format_plaid_category(plaid_cat)
         cat_totals[display] += float(txn['amount'])
 
     code_categories = [
@@ -852,9 +836,7 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
             if txn_key in alias_categories:
                 user_cat = alias_categories[txn_key]
                 plaid_cat = txn.get('personal_finance_category', '')
-                plaid_display = PLAID_CATEGORY_MAP.get(
-                    plaid_cat, (plaid_cat or 'Other').replace('_', ' ').title()
-                )
+                plaid_display = format_plaid_category(plaid_cat)
                 amt = float(txn['amount'])
                 # Move from Plaid category to user category
                 if plaid_display in adjusted_totals:
