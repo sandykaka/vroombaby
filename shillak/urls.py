@@ -17,6 +17,7 @@ urlpatterns = [
     path('api/home/threshold/', views.threshold_api, name='threshold'),
     path('api/home/rename/', views.rename_home_api, name='rename_home'),
     path('api/home/remove-member/', views.remove_member_api, name='remove_member'),
+    path('api/account/delete/', views.delete_account_api, name='delete_account'),
 
     # Plaid bank linking
     path('api/plaid/create-link-token/', views.create_link_token_api, name='create_link_token'),

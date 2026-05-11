@@ -308,6 +308,36 @@ def remove_member_api(request):
 
 @csrf_exempt
 @require_firebase_auth
+def delete_account_api(request):
+    """Delete user's account and all associated data."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    user = request.user
+
+    # Remove from home
+    HomeMember.objects.filter(user=user).delete()
+
+    # Delete all user data
+    Transaction.objects.filter(user=user).delete()
+    BankAccount.objects.filter(user=user).delete()
+    PlaidItem.objects.filter(user=user).delete()
+    TransferRequest.objects.filter(from_user=user).delete()
+    TransferRequest.objects.filter(to_user=user).delete()
+
+    # Delete profile
+    from shillak.models import UserProfile
+    UserProfile.objects.filter(user=user).delete()
+
+    # Delete the Django user
+    logger.info(f"Account deleted: {user.username}")
+    user.delete()
+
+    return JsonResponse({'status': 'deleted'})
+
+
+@csrf_exempt
+@require_firebase_auth
 def create_link_token_api(request):
     """Create a Plaid Link token for the iOS client."""
     if request.method != 'POST':
