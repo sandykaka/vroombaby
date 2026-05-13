@@ -18,6 +18,8 @@ urlpatterns = [
     path('api/home/rename/', views.rename_home_api, name='rename_home'),
     path('api/home/remove-member/', views.remove_member_api, name='remove_member'),
     path('api/account/delete/', views.delete_account_api, name='delete_account'),
+    path('api/account/premium/', views.update_premium_api, name='update_premium'),
+    path('api/account/check-premium/', views.check_premium_api, name='check_premium'),
 
     # Plaid bank linking
     path('api/plaid/create-link-token/', views.create_link_token_api, name='create_link_token'),

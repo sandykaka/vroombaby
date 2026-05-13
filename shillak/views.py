@@ -308,6 +308,44 @@ def remove_member_api(request):
 
 @csrf_exempt
 @require_firebase_auth
+def update_premium_api(request):
+    """Update Home premium status when a member subscribes or cancels."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    is_premium = data.get('is_premium', False)
+
+    membership = HomeMember.objects.filter(user=request.user).first()
+    if not membership:
+        return JsonResponse({'error': 'Not in a home'}, status=400)
+
+    home = membership.home
+    home.is_premium = is_premium
+    home.premium_user_id = request.user.id if is_premium else None
+    home.save(update_fields=['is_premium', 'premium_user_id'])
+
+    logger.info(f"Home '{home.name}' premium={is_premium} by {request.user.username}")
+
+    return JsonResponse({'status': 'updated', 'is_premium': home.is_premium})
+
+
+@require_firebase_auth
+def check_premium_api(request):
+    """Check if the user's Home has premium access."""
+    membership = HomeMember.objects.filter(user=request.user).first()
+    if not membership:
+        return JsonResponse({'is_premium': False})
+
+    return JsonResponse({'is_premium': membership.home.is_premium})
+
+
+@csrf_exempt
+@require_firebase_auth
 def delete_account_api(request):
     """Delete user's account and all associated data."""
     if request.method != 'POST':

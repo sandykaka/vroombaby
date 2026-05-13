@@ -26,6 +26,8 @@ class Home(models.Model):
     low_balance_threshold = models.DecimalField(
         max_digits=10, decimal_places=2, default=100
     )
+    is_premium = models.BooleanField(default=False)
+    premium_user_id = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
