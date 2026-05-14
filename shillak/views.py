@@ -1224,5 +1224,9 @@ def privacy_policy(request):
     return render(request, 'shillak/privacy.html')
 
 
+def terms_of_use(request):
+    return render(request, 'shillak/terms.html')
+
+
 def support(request):
     return render(request, 'shillak/support.html')
