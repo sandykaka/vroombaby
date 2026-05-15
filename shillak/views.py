@@ -1230,3 +1230,25 @@ def terms_of_use(request):
 
 def support(request):
     return render(request, 'shillak/support.html')
+
+
+def apple_app_site_association(request):
+    """Serve the Apple App Site Association file for Universal Links."""
+    data = {
+        "applinks": {
+            "details": [
+                {
+                    "appIDs": ["4WKM8GU86V.bleedblue.Shillak"],
+                    "components": [
+                        {"/": "/shillak/join/*", "comment": "Invite join links"}
+                    ]
+                }
+            ]
+        }
+    }
+    return JsonResponse(data, content_type='application/json')
+
+
+def join_invite(request, code):
+    """Web landing page for invite links when the app is not installed."""
+    return render(request, 'shillak/join.html', {'invite_code': code})

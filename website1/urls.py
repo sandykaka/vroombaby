@@ -18,8 +18,10 @@ from django.urls import path, include
 from django.contrib.auth import views as auth_views
 from django.conf import settings
 from django.conf.urls.static import static
+from shillak.views import apple_app_site_association
 
 urlpatterns = [
+    path('.well-known/apple-app-site-association', apple_app_site_association),
     path('', include('business.urls')),
     path('shopright/', include('shopright.urls')),  # ShopRight grocery app API
     path('shillak/', include('shillak.urls')),  # Shillak family finance app API

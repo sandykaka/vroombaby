@@ -50,4 +50,5 @@ urlpatterns = [
     path('privacy/', views.privacy_policy, name='privacy_policy'),
     path('terms/', views.terms_of_use, name='terms_of_use'),
     path('support/', views.support, name='support'),
+    path('join/<str:code>/', views.join_invite, name='join_invite'),
 ]
