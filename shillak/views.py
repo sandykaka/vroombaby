@@ -309,7 +309,12 @@ def remove_member_api(request):
 @csrf_exempt
 @require_firebase_auth
 def update_premium_api(request):
-    """Update Home premium status when a member subscribes or cancels."""
+    """Update Home premium status when a member subscribes or cancels.
+
+    Only the user who actually subscribed can toggle premium off. Non-subscribers
+    cannot downgrade a Home that someone else paid for, and cannot accidentally
+    overwrite a manual admin grant.
+    """
     if request.method != 'POST':
         return JsonResponse({'error': 'Only POST allowed'}, status=405)
 
@@ -325,11 +330,22 @@ def update_premium_api(request):
         return JsonResponse({'error': 'Not in a home'}, status=400)
 
     home = membership.home
-    home.is_premium = is_premium
-    home.premium_user_id = request.user.id if is_premium else None
-    home.save(update_fields=['is_premium', 'premium_user_id'])
 
-    logger.info(f"Home '{home.name}' premium={is_premium} by {request.user.username}")
+    if is_premium:
+        home.is_premium = True
+        home.premium_user_id = request.user.id
+        home.save(update_fields=['is_premium', 'premium_user_id'])
+        logger.info(f"Home '{home.name}' premium=True by {request.user.username}")
+    elif home.premium_user_id == request.user.id:
+        home.is_premium = False
+        home.premium_user_id = None
+        home.save(update_fields=['is_premium', 'premium_user_id'])
+        logger.info(f"Home '{home.name}' premium=False by {request.user.username}")
+    else:
+        logger.info(
+            f"Ignored premium=False from {request.user.username} on '{home.name}' "
+            f"(not the subscriber)"
+        )
 
     return JsonResponse({'status': 'updated', 'is_premium': home.is_premium})
 
