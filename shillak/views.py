@@ -1248,6 +1248,10 @@ def support(request):
     return render(request, 'shillak/support.html')
 
 
+def landing(request):
+    return render(request, 'shillak/landing.html')
+
+
 def apple_app_site_association(request):
     """Serve the Apple App Site Association file for Universal Links."""
     data = {

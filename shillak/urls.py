@@ -47,6 +47,7 @@ urlpatterns = [
     path('api/transactions/', views.transactions_api, name='transactions'),
 
     # Static pages
+    path('', views.landing, name='landing'),
     path('privacy/', views.privacy_policy, name='privacy_policy'),
     path('terms/', views.terms_of_use, name='terms_of_use'),
     path('support/', views.support, name='support'),

@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shillak — Family Finance for Couples</title>
+    <meta name="description" content="See your shared bank balances in one place, get alerts when accounts dip low, and request transfers without the awkward 9 PM text. Built for couples and families.">
+    <meta property="og:title" content="Shillak — Family Finance for Couples">
+    <meta property="og:description" content="Stop fighting about money. See your shared bank balances in one place.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://www.vroombaby.com/shillak/">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            color: #1d1d1f;
+            background: #ffffff;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        a { color: #35BE61; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Nav */
+        nav {
+            padding: 20px 0;
+            position: sticky;
+            top: 0;
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: saturate(180%) blur(20px);
+            -webkit-backdrop-filter: saturate(180%) blur(20px);
+            z-index: 100;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        nav .container { display: flex; justify-content: space-between; align-items: center; }
+        nav .logo { font-size: 20px; font-weight: 700; color: #1d1d1f; }
+        nav .logo span { color: #35BE61; }
+        nav .links a { color: #6e6e73; margin-left: 24px; font-size: 14px; }
+        nav .cta {
+            background: #35BE61;
+            color: white !important;
+            padding: 8px 16px;
+            border-radius: 980px;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        nav .cta:hover { text-decoration: none; background: #2ea854; }
+
+        /* Hero */
+        .hero {
+            padding: 80px 0 100px;
+            background: linear-gradient(180deg, #f5f9f6 0%, #ffffff 100%);
+            text-align: center;
+        }
+        .hero h1 {
+            font-size: 64px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.05;
+            margin-bottom: 20px;
+            color: #1d1d1f;
+        }
+        .hero h1 .accent { color: #35BE61; }
+        .hero .subhead {
+            font-size: 22px;
+            color: #6e6e73;
+            max-width: 640px;
+            margin: 0 auto 40px;
+            line-height: 1.4;
+        }
+        .hero .download-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            background: #1d1d1f;
+            color: white !important;
+            padding: 16px 32px;
+            border-radius: 980px;
+            font-size: 17px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        .hero .download-btn:hover { background: #35BE61; text-decoration: none; }
+        .hero .download-btn svg { width: 22px; height: 22px; }
+
+        /* Phone mockup */
+        .phone-mockup {
+            margin: 60px auto 0;
+            width: 280px;
+            height: 580px;
+            background: #1d1d1f;
+            border-radius: 44px;
+            padding: 12px;
+            box-shadow: 0 30px 80px rgba(53, 190, 97, 0.25), 0 10px 30px rgba(0,0,0,0.1);
+            position: relative;
+        }
+        .phone-screen {
+            background: #ffffff;
+            border-radius: 32px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 24px;
+            position: relative;
+            overflow: hidden;
+        }
+        .phone-screen .logo-mark {
+            width: 80px;
+            height: 80px;
+            background: white;
+            border-radius: 18px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            font-weight: 800;
+            color: #35BE61;
+            margin-bottom: 20px;
+        }
+        .phone-screen .app-name { font-size: 28px; font-weight: 700; margin-bottom: 6px; }
+        .phone-screen .app-tagline { font-size: 14px; color: #6e6e73; margin-bottom: 36px; }
+        .phone-screen .feature-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            margin-bottom: 14px;
+            font-size: 13px;
+        }
+        .phone-screen .feature-row .icon {
+            width: 28px;
+            height: 28px;
+            background: rgba(53, 190, 97, 0.1);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #35BE61;
+            font-weight: 700;
+            font-size: 14px;
+        }
+        .phone-screen .feature-row .label { font-weight: 600; color: #1d1d1f; }
+        .phone-screen .feature-row .desc { color: #6e6e73; font-size: 11px; }
+
+        /* Pain section */
+        .pain {
+            padding: 100px 0;
+            background: #ffffff;
+            text-align: center;
+        }
+        .pain h2 {
+            font-size: 48px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.1;
+            max-width: 800px;
+            margin: 0 auto 24px;
+        }
+        .pain p {
+            font-size: 20px;
+            color: #6e6e73;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* Features */
+        .features {
+            padding: 100px 0;
+            background: #f5f5f7;
+        }
+        .features h2 {
+            font-size: 48px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 60px;
+            letter-spacing: -0.02em;
+        }
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+        }
+        .feature-card {
+            background: white;
+            padding: 40px 32px;
+            border-radius: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.04);
+        }
+        .feature-card .feature-icon {
+            width: 56px;
+            height: 56px;
+            background: linear-gradient(135deg, #35BE61, #2ea854);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 20px;
+        }
+        .feature-card h3 { font-size: 22px; font-weight: 700; margin-bottom: 10px; }
+        .feature-card p { color: #6e6e73; font-size: 16px; }
+
+        /* How it works */
+        .how {
+            padding: 100px 0;
+            background: white;
+        }
+        .how h2 {
+            font-size: 48px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 60px;
+            letter-spacing: -0.02em;
+        }
+        .steps {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 32px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .step { text-align: center; }
+        .step .num {
+            width: 44px;
+            height: 44px;
+            background: #35BE61;
+            color: white;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 18px;
+            margin-bottom: 20px;
+        }
+        .step h3 { font-size: 20px; font-weight: 700; margin-bottom: 10px; }
+        .step p { color: #6e6e73; font-size: 16px; }
+
+        /* Pricing */
+        .pricing {
+            padding: 100px 0;
+            background: #f5f5f7;
+        }
+        .pricing h2 {
+            font-size: 48px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 16px;
+            letter-spacing: -0.02em;
+        }
+        .pricing .subtitle {
+            text-align: center;
+            color: #6e6e73;
+            font-size: 18px;
+            margin-bottom: 60px;
+        }
+        .price-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .price-card {
+            background: white;
+            padding: 40px 32px;
+            border-radius: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.04);
+            position: relative;
+        }
+        .price-card.premium {
+            border: 2px solid #35BE61;
+        }
+        .price-card .badge {
+            position: absolute;
+            top: -12px;
+            right: 24px;
+            background: #35BE61;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 980px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .price-card .name { font-size: 14px; color: #6e6e73; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+        .price-card .price { font-size: 40px; font-weight: 700; margin: 8px 0; }
+        .price-card .price small { font-size: 16px; color: #6e6e73; font-weight: 400; }
+        .price-card ul { list-style: none; margin-top: 24px; }
+        .price-card ul li {
+            padding: 8px 0;
+            color: #1d1d1f;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            font-size: 15px;
+        }
+        .price-card ul li::before {
+            content: '✓';
+            color: #35BE61;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        /* FAQ */
+        .faq {
+            padding: 100px 0;
+            background: white;
+        }
+        .faq h2 {
+            font-size: 48px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 60px;
+            letter-spacing: -0.02em;
+        }
+        .faq-list { max-width: 760px; margin: 0 auto; }
+        .faq-item {
+            border-bottom: 1px solid rgba(0,0,0,0.08);
+            padding: 24px 0;
+        }
+        .faq-item:last-child { border-bottom: none; }
+        .faq-item h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+        .faq-item p { color: #6e6e73; font-size: 16px; }
+
+        /* CTA */
+        .cta-section {
+            padding: 100px 0;
+            background: linear-gradient(135deg, #35BE61 0%, #1a8a44 100%);
+            color: white;
+            text-align: center;
+        }
+        .cta-section h2 {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            letter-spacing: -0.02em;
+        }
+        .cta-section p {
+            font-size: 20px;
+            opacity: 0.9;
+            margin-bottom: 36px;
+        }
+        .cta-section .download-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            background: white;
+            color: #1d1d1f !important;
+            padding: 18px 36px;
+            border-radius: 980px;
+            font-size: 18px;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+        .cta-section .download-btn:hover { transform: scale(1.04); text-decoration: none; }
+        .cta-section .download-btn svg { width: 24px; height: 24px; }
+
+        /* Footer */
+        footer {
+            padding: 60px 0 40px;
+            background: #1d1d1f;
+            color: #a1a1a6;
+            font-size: 14px;
+        }
+        footer .footer-grid {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 32px;
+            padding-bottom: 32px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        footer .brand { color: white; font-weight: 700; font-size: 18px; }
+        footer .brand span { color: #35BE61; }
+        footer .links a { color: #a1a1a6; margin-right: 24px; font-size: 14px; }
+        footer .links a:hover { color: white; text-decoration: none; }
+        footer .copyright {
+            padding-top: 32px;
+            text-align: center;
+            font-size: 13px;
+        }
+
+        /* Mobile */
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 40px; }
+            .hero .subhead { font-size: 18px; }
+            .pain h2, .features h2, .how h2, .pricing h2, .faq h2, .cta-section h2 { font-size: 32px; }
+            .phone-mockup { width: 240px; height: 500px; }
+            .price-grid { grid-template-columns: 1fr; }
+            nav .links a:not(.cta) { display: none; }
+            footer .footer-grid { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div class="container">
+            <div class="logo">Shillak<span>.</span></div>
+            <div class="links">
+                <a href="#features">Features</a>
+                <a href="#pricing">Pricing</a>
+                <a href="#faq">FAQ</a>
+                <a href="https://apps.apple.com/app/id6762668724" class="cta">Download</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="hero">
+        <div class="container">
+            <h1>Stop fighting about<br><span class="accent">money.</span></h1>
+            <p class="subhead">See your shared bank balances in one place, get alerts when accounts dip low, and request transfers without the awkward 9 PM text.</p>
+            <a href="https://apps.apple.com/app/id6762668724" class="download-btn">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+                Download on the App Store
+            </a>
+
+            <div class="phone-mockup">
+                <div class="phone-screen">
+                    <div class="logo-mark">$</div>
+                    <div class="app-name">Shillak</div>
+                    <div class="app-tagline">Family finances, together.</div>
+                    <div class="feature-row">
+                        <div class="icon">$</div>
+                        <div>
+                            <div class="label">All accounts, one view</div>
+                            <div class="desc">See every balance across the household</div>
+                        </div>
+                    </div>
+                    <div class="feature-row">
+                        <div class="icon">!</div>
+                        <div>
+                            <div class="label">Low balance alerts</div>
+                            <div class="desc">Get notified before funds run low</div>
+                        </div>
+                    </div>
+                    <div class="feature-row">
+                        <div class="icon">⇄</div>
+                        <div>
+                            <div class="label">Quick transfers</div>
+                            <div class="desc">Move money between partners instantly</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="pain">
+        <div class="container">
+            <h2>If you and your partner have ever fought about money…</h2>
+            <p>Shillak fixes the actual problem: visibility. When you both see the same numbers, the arguments evaporate.</p>
+        </div>
+    </section>
+
+    <section class="features" id="features">
+        <div class="container">
+            <h2>Everything you need to manage money together.</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">$</div>
+                    <h3>Shared balances</h3>
+                    <p>Link Bank of America, Chase, Capital One, Wells Fargo, and 12,000+ more. See every account on one screen.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">!</div>
+                    <h3>Low-balance alerts</h3>
+                    <p>Get a push notification the moment any account drops below your threshold. No more surprise overdrafts.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⇄</div>
+                    <h3>Transfer requests</h3>
+                    <p>Tap once to ping your partner for a transfer via Venmo or Zelle. No more awkward 11 PM "did you transfer?" texts.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h3>AI cash flow predictions</h3>
+                    <p>Premium members get weekly forecasts that flag risk weeks before they happen. Know what's coming, plan ahead.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">👨‍👩‍👧</div>
+                    <h3>Up to 4 family members</h3>
+                    <p>Built for couples, ready for the whole family. Invite your partner with a tap-to-join link — no codes to type.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔒</div>
+                    <h3>Bank-grade security</h3>
+                    <p>We use Plaid — the same backend as Venmo, Robinhood, and Coinbase. Your bank credentials never touch our servers.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="how">
+        <div class="container">
+            <h2>How it works.</h2>
+            <div class="steps">
+                <div class="step">
+                    <div class="num">1</div>
+                    <h3>Link your banks</h3>
+                    <p>Connect your accounts securely via Plaid in under a minute.</p>
+                </div>
+                <div class="step">
+                    <div class="num">2</div>
+                    <h3>Invite your partner</h3>
+                    <p>Send a tap-to-join link. They install the app and join your Home instantly.</p>
+                </div>
+                <div class="step">
+                    <div class="num">3</div>
+                    <h3>Stop fighting</h3>
+                    <p>See the same balances. Get the same alerts. Make decisions together.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="pricing" id="pricing">
+        <div class="container">
+            <h2>Simple pricing.</h2>
+            <p class="subtitle">Start free. Upgrade when you're ready.</p>
+            <div class="price-grid">
+                <div class="price-card">
+                    <div class="name">Free</div>
+                    <div class="price">$0</div>
+                    <ul>
+                        <li>Link 1 bank account per person</li>
+                        <li>Shared balance dashboard</li>
+                        <li>Low balance alerts</li>
+                        <li>Transfer requests</li>
+                        <li>Up to 2 household members</li>
+                    </ul>
+                </div>
+                <div class="price-card premium">
+                    <div class="badge">Most popular</div>
+                    <div class="name">Premium</div>
+                    <div class="price">$4.99<small>/mo</small></div>
+                    <p style="color: #6e6e73; font-size: 14px;">or <strong>$39.99/yr</strong> — save 33%</p>
+                    <ul>
+                        <li>Unlimited bank accounts</li>
+                        <li>AI cash flow predictions</li>
+                        <li>Past months browsing</li>
+                        <li>Spending breakdown by category</li>
+                        <li>Quick transfer requests</li>
+                        <li>Up to 4 family members</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="faq" id="faq">
+        <div class="container">
+            <h2>Questions?</h2>
+            <div class="faq-list">
+                <div class="faq-item">
+                    <h3>Is my financial data safe?</h3>
+                    <p>Yes. Shillak uses Plaid — the same secure backend trusted by Venmo, Robinhood, and Coinbase — to connect to your bank. Your credentials never touch our servers. We don't sell data, we don't run ads, and everything is encrypted in transit.</p>
+                </div>
+                <div class="faq-item">
+                    <h3>Which banks does Shillak support?</h3>
+                    <p>Over 12,000 financial institutions including Bank of America, Chase, Capital One, Wells Fargo, US Bank, PNC, Citi, Discover, Ally, and more.</p>
+                </div>
+                <div class="faq-item">
+                    <h3>How do I share with my partner?</h3>
+                    <p>Open Settings → Invite Someone → tap a contact. They get a link. They tap. Shillak opens (or installs from the App Store) and joins your Home instantly. No codes to type.</p>
+                </div>
+                <div class="faq-item">
+                    <h3>Can I cancel anytime?</h3>
+                    <p>Yes. Manage your subscription in Settings → Subscription → Manage Subscription, or directly through your Apple ID account settings. Cancellation takes effect at the end of your current billing period.</p>
+                </div>
+                <div class="faq-item">
+                    <h3>Does Shillak work on Android?</h3>
+                    <p>Not yet. Shillak is iPhone-only for now. Android support is on the roadmap.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="cta-section">
+        <div class="container">
+            <h2>Stop fighting. Start sharing.</h2>
+            <p>Free to download. Free to invite your partner. Free to use forever.</p>
+            <a href="https://apps.apple.com/app/id6762668724" class="download-btn">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+                Download on the App Store
+            </a>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <div class="footer-grid">
+                <div class="brand">Shillak<span>.</span></div>
+                <div class="links">
+                    <a href="/shillak/privacy/">Privacy</a>
+                    <a href="/shillak/terms/">Terms</a>
+                    <a href="/shillak/support/">Support</a>
+                    <a href="mailto:ssvkakade@gmail.com">Contact</a>
+                </div>
+            </div>
+            <div class="copyright">
+                © 2026 Shillak. Made for couples who'd rather kiss than argue.
+            </div>
+        </div>
+    </footer>
+
+</body>
+</html>
