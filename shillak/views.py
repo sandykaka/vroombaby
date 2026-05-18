@@ -153,6 +153,12 @@ def join_home_api(request):
             status=400,
         )
 
+    if home.member_count >= 2 and not home.is_premium:
+        return JsonResponse(
+            {'error': 'This home is at the free 2-member limit. The owner needs to upgrade to Premium to add more members.'},
+            status=402,
+        )
+
     HomeMember.objects.create(
         user=request.user, home=home, role='partner'
     )
