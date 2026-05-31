@@ -136,26 +136,47 @@ def join_home_api(request):
     try:
         home = Home.objects.get(invite_code=invite_code)
     except Home.DoesNotExist:
-        return JsonResponse({'error': 'Invalid invite code'}, status=404)
+        return JsonResponse(
+            {'error': 'This invite link is no longer valid. It may have been used by someone else or expired. Ask the home owner for a fresh invite.'},
+            status=404,
+        )
 
     if HomeMember.objects.filter(user=request.user, home=home).exists():
-        return JsonResponse({'error': 'Already a member of this home'}, status=400)
+        return JsonResponse(
+            {'error': "You're already a member of this home."},
+            status=400,
+        )
 
     if HomeMember.objects.filter(user=request.user).exists():
         return JsonResponse(
-            {'error': 'You are already in another home. Leave it first.'},
+            {'error': "You're already in another home. Leave that home in Settings before joining a new one."},
             status=400,
         )
 
     if home.member_count >= 4:
         return JsonResponse(
-            {'error': 'This home already has 4 members.'},
+            {'error': 'This home already has the maximum 4 members.'},
             status=400,
         )
 
     if home.member_count >= 2 and not home.is_premium:
+        # Notify the home owner so they know someone tried to join.
+        owner_member = home.members.filter(role='owner').select_related('user').first()
+        if owner_member:
+            display_name = _display_name_for_user(request.user)
+            NotificationService.send_notification(
+                user=owner_member.user,
+                title="Someone tried to join your home",
+                body=f"{display_name} tried to join Shillak but your home is at the free 2-member limit. Upgrade to Premium or remove a member to let them in.",
+                data={
+                    'home_id': str(home.id),
+                    'attempted_user_id': str(request.user.id),
+                    'action': 'open_subscription',
+                },
+                notification_type='join_blocked_premium',
+            )
         return JsonResponse(
-            {'error': 'This home is at the free 2-member limit. The owner needs to upgrade to Premium to add more members.'},
+            {'error': "This home is full on the free plan. The owner has been notified — they'll need to upgrade to Premium or remove a member to let you in."},
             status=402,
         )
 
@@ -169,11 +190,41 @@ def join_home_api(request):
 
     logger.info(f"{request.user.username} joined home '{home.name}'")
 
+    # Notify all existing members that someone joined.
+    display_name = _display_name_for_user(request.user)
+    other_members = home.members.exclude(user=request.user).select_related('user')
+    for member in other_members:
+        NotificationService.send_notification(
+            user=member.user,
+            title="New Shillak member",
+            body=f"{display_name} joined your home. Their balances will appear on your dashboard.",
+            data={
+                'home_id': str(home.id),
+                'new_member_id': str(request.user.id),
+                'action': 'open_settings',
+            },
+            notification_type='member_joined',
+        )
+
     return JsonResponse({
         'home_id': home.id,
         'name': home.name,
         'member_count': home.member_count,
     })
+
+
+def _display_name_for_user(user):
+    """Return the user's display_name if set, otherwise a friendly phone format."""
+    profile = UserProfile.objects.filter(user=user).first()
+    if profile and profile.display_name:
+        return profile.display_name
+
+    username = user.username or 'Someone'
+    # Format E.164 phone +16505551234 → (650) 555-1234
+    if username.startswith('+1') and len(username) == 12 and username[2:].isdigit():
+        digits = username[2:]
+        return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    return username
 
 
 @require_firebase_auth
@@ -219,7 +270,16 @@ def home_info_api(request):
 @csrf_exempt
 @require_firebase_auth
 def leave_home_api(request):
-    """Leave the current home. Owners cannot leave (must transfer first)."""
+    """Leave the current home.
+
+    Rules:
+    - Non-owners can always leave.
+    - An owner who is alone in the home can leave; the home and all of the
+      leaver's bank/transaction data is cleaned up so the user can join a
+      different home with a fresh slate.
+    - An owner with other members must transfer ownership or remove the other
+      members first (we can't leave them stranded).
+    """
     if request.method != 'POST':
         return JsonResponse({'error': 'Only POST allowed'}, status=405)
 
@@ -227,16 +287,36 @@ def leave_home_api(request):
     if not membership:
         return JsonResponse({'error': 'You are not in a home'}, status=400)
 
-    if membership.role == 'owner':
+    home = membership.home
+    home_name = home.name
+    user = request.user
+
+    if membership.role == 'owner' and home.member_count > 1:
         return JsonResponse(
-            {'error': 'Owners cannot leave. Transfer ownership first.'},
+            {'error': 'Owners cannot leave while other members are in the home. Remove them or transfer ownership first.'},
             status=400,
         )
 
-    home_name = membership.home.name
+    # Always remove the user's own data when they leave.
+    Transaction.objects.filter(user=user).delete()
+    BankAccount.objects.filter(user=user).delete()
+    PlaidItem.objects.filter(user=user).delete()
+    TransferRequest.objects.filter(from_user=user).delete()
+    TransferRequest.objects.filter(to_user=user).delete()
+
     membership.delete()
 
-    logger.info(f"{request.user.username} left home '{home_name}'")
+    # If the home is now empty, delete it (cascade handles its own data).
+    if home.member_count == 0:
+        home.delete()
+        logger.info(f"{user.username} left and deleted empty home '{home_name}'")
+    else:
+        # If the leaver was the premium subscriber, clear the home's premium flag.
+        if home.premium_user_id == user.id:
+            home.is_premium = False
+            home.premium_user_id = None
+            home.save(update_fields=['is_premium', 'premium_user_id'])
+        logger.info(f"{user.username} left home '{home_name}'")
 
     return JsonResponse({'status': 'left', 'home_name': home_name})
 
