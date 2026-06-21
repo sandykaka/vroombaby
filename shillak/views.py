@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 
 from django.http import JsonResponse
 from django.shortcuts import render
@@ -160,21 +161,23 @@ def join_home_api(request):
         )
 
     if home.member_count >= 2 and not home.is_premium:
-        # Notify the home owner so they know someone tried to join.
         owner_member = home.members.filter(role='owner').select_related('user').first()
         if owner_member:
             display_name = _display_name_for_user(request.user)
-            NotificationService.send_notification(
-                user=owner_member.user,
-                title="Someone tried to join your home",
-                body=f"{display_name} tried to join Shillak but your home is at the free 2-member limit. Upgrade to Premium or remove a member to let them in.",
-                data={
-                    'home_id': str(home.id),
-                    'attempted_user_id': str(request.user.id),
-                    'action': 'open_subscription',
-                },
-                notification_type='join_blocked_premium',
-            )
+            _owner = owner_member.user
+            _home_id = str(home.id)
+            _attempted_id = str(request.user.id)
+            def _notify_blocked():
+                from django.db import close_old_connections
+                close_old_connections()
+                NotificationService.send_notification(
+                    user=_owner,
+                    title="Someone tried to join your home",
+                    body=f"{display_name} tried to join Shillak but your home is at the free 2-member limit. Upgrade to Premium or remove a member to let them in.",
+                    data={'home_id': _home_id, 'attempted_user_id': _attempted_id, 'action': 'open_subscription'},
+                    notification_type='join_blocked_premium',
+                )
+            threading.Thread(target=_notify_blocked, daemon=True).start()
         return JsonResponse(
             {'error': "This home is full on the free plan. The owner has been notified — they'll need to upgrade to Premium or remove a member to let you in."},
             status=402,
@@ -191,20 +194,23 @@ def join_home_api(request):
     logger.info(f"{request.user.username} joined home '{home.name}'")
 
     # Notify all existing members that someone joined.
+    # Evaluate queryset to list now so the background thread doesn't hold a lazy queryset.
     display_name = _display_name_for_user(request.user)
-    other_members = home.members.exclude(user=request.user).select_related('user')
-    for member in other_members:
-        NotificationService.send_notification(
-            user=member.user,
-            title="New Shillak member",
-            body=f"{display_name} joined your home. Their balances will appear on your dashboard.",
-            data={
-                'home_id': str(home.id),
-                'new_member_id': str(request.user.id),
-                'action': 'open_settings',
-            },
-            notification_type='member_joined',
-        )
+    other_members_list = list(home.members.exclude(user=request.user).select_related('user'))
+    _home_id = str(home.id)
+    _new_id = str(request.user.id)
+    def _notify_joined():
+        from django.db import close_old_connections
+        close_old_connections()
+        for member in other_members_list:
+            NotificationService.send_notification(
+                user=member.user,
+                title="New Shillak member",
+                body=f"{display_name} joined your home. Their balances will appear on your dashboard.",
+                data={'home_id': _home_id, 'new_member_id': _new_id, 'action': 'open_settings'},
+                notification_type='member_joined',
+            )
+    threading.Thread(target=_notify_joined, daemon=True).start()
 
     return JsonResponse({
         'home_id': home.id,
@@ -859,17 +865,26 @@ def create_transfer_request_api(request):
 
     amount_str = f" ${parsed_amount:,.2f}" if parsed_amount else ""
     account_str = f" for {account.account_name}" if account else ""
-    NotificationService.send_notification(
-        user=partner,
-        title="Transfer Request",
-        body=f"Your partner requested{amount_str}{account_str} via {method.title()}.",
-        data={
-            'transfer_id': str(transfer.id),
-            'method': method,
-            'action': 'open_activity',
-        },
-        notification_type='transfer_request',
-    )
+
+    # Fire notification in background — synchronous FCM calls were causing 499 timeouts.
+    # Transfer is already saved; notification failure doesn't affect data integrity.
+    # close_old_connections() lets Django open a fresh DB connection for the new thread
+    # instead of inheriting the request thread's connection (which is not thread-safe).
+    def _notify():
+        from django.db import close_old_connections
+        close_old_connections()
+        NotificationService.send_notification(
+            user=partner,
+            title="Transfer Request",
+            body=f"Your partner requested{amount_str}{account_str} via {method.title()}.",
+            data={
+                'transfer_id': str(transfer.id),
+                'method': method,
+                'action': 'open_activity',
+            },
+            notification_type='transfer_request',
+        )
+    threading.Thread(target=_notify, daemon=True).start()
 
     logger.info(f"Transfer request created: {transfer}")
 
