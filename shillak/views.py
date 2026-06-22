@@ -881,6 +881,8 @@ def create_transfer_request_api(request):
                 'transfer_id': str(transfer.id),
                 'method': method,
                 'action': 'open_activity',
+                'from_phone': request.user.username,
+                'amount': str(parsed_amount) if parsed_amount else '',
             },
             notification_type='transfer_request',
         )
