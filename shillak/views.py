@@ -866,6 +866,10 @@ def create_transfer_request_api(request):
     amount_str = f" ${parsed_amount:,.2f}" if parsed_amount else ""
     account_str = f" for {account.account_name}" if account else ""
 
+    sender_profile = UserProfile.objects.filter(user=request.user).first()
+    sender_name = sender_profile.display_name if sender_profile and sender_profile.display_name else None
+    requester_str = f"{sender_name} requested" if sender_name else "Transfer requested"
+
     # Fire notification in background — synchronous FCM calls were causing 499 timeouts.
     # Transfer is already saved; notification failure doesn't affect data integrity.
     # close_old_connections() lets Django open a fresh DB connection for the new thread
@@ -876,7 +880,7 @@ def create_transfer_request_api(request):
         NotificationService.send_notification(
             user=partner,
             title="Transfer Request",
-            body=f"Your partner requested{amount_str}{account_str} via {method.title()}.",
+            body=f"{requester_str}{amount_str}{account_str} via {method.title()}.",
             data={
                 'transfer_id': str(transfer.id),
                 'method': method,
