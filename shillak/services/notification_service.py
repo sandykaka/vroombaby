@@ -77,15 +77,18 @@ class NotificationService:
         balance_str = f"${account.balance:,.2f}"
         threshold_str = f"${home.low_balance_threshold:,.2f}"
 
+        owner_profile = UserProfile.objects.filter(user=account.user).first()
+        owner_display_name = (owner_profile.display_name if owner_profile else None) or "Someone"
+
         for user in recipients:
             is_owner = (user == account.user)
 
             if is_owner:
                 title = f"{account.account_name} is low"
-                body = f"Balance is {balance_str} (below {threshold_str}). Transfer from your partner?"
+                body = f"Balance is {balance_str} (below {threshold_str}). Tap to request a transfer."
             else:
-                title = f"Partner's {account.account_name} is low"
-                body = f"Balance is {balance_str}. They may need help."
+                title = f"{owner_display_name}'s {account.account_name} is low"
+                body = f"Balance is {balance_str}. Tap to send a transfer."
 
             NotificationService.send_notification(
                 user=user,
