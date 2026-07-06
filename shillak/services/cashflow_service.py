@@ -910,8 +910,11 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         )
         predictions.append(prediction)
 
-    # Send alerts for high-risk weeks
-    high_risk = [p for p in predictions if p.risk_level in ('high', 'medium')]
+    # Send alerts for high-risk weeks (skip if already alerted at similar balance)
+    high_risk = [
+        p for p in predictions
+        if p.risk_level == 'high' and not p.alerted
+    ]
     if high_risk:
         members = [
             m.user for m in
@@ -919,23 +922,27 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
         ]
 
         for prediction in high_risk:
-            if prediction.risk_level == 'high':
-                bills_str = ', '.join(
-                    f"{b['name']} ${b['amount']}" for b in prediction.bills_due
+            bills_str = ', '.join(
+                f"{b['name']} ${b['amount']}" for b in prediction.bills_due
+            )
+            for user in members:
+                NotificationService.send_notification(
+                    user=user,
+                    title='Cash Flow Alert',
+                    body=f"Upcoming bills ({bills_str}) may exceed your balance. "
+                         f"Estimated end balance: ${prediction.estimated_end_balance:,.2f}",
+                    data={
+                        'week_start': str(prediction.week_start),
+                        'risk_level': prediction.risk_level,
+                        'action': 'open_dashboard',
+                    },
+                    notification_type='cashflow_alert',
                 )
-                for user in members:
-                    NotificationService.send_notification(
-                        user=user,
-                        title='Cash Flow Alert',
-                        body=f"Upcoming bills ({bills_str}) may exceed your balance. "
-                             f"Estimated end balance: ${prediction.estimated_end_balance:,.2f}",
-                        data={
-                            'week_start': str(prediction.week_start),
-                            'risk_level': prediction.risk_level,
-                            'action': 'open_dashboard',
-                        },
-                        notification_type='cashflow_alert',
-                    )
+
+            # Mark as alerted so we don't re-notify until balance shifts >10%
+            prediction.alerted = True
+            prediction.alerted_at_balance = Decimal(str(total_balance))
+            prediction.save(update_fields=['alerted', 'alerted_at_balance'])
 
     logger.info(
         f"Saved {len(predictions)} predictions for {home.name}, "
