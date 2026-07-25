@@ -694,13 +694,15 @@ Provide exactly 4 weekly predictions starting from Monday of current week.
                 parsed = [dt.strptime(d, '%Y-%m-%d').date() for d in dates]
                 # Calculate average interval between consecutive payments
                 intervals = [(parsed[i+1] - parsed[i]).days for i in range(len(parsed)-1)]
-                avg_interval = sum(intervals) / len(intervals)
+                # Clamp to >=1 so we never hang in an infinite while-loop when
+                # two deposits share a date (avg 0 → round 0 → never advances).
+                avg_interval = max(1, round(sum(intervals) / len(intervals)))
 
                 # Project forward from last known date using actual interval
                 last_date = parsed[-1]
-                next_date = last_date + timedelta(days=round(avg_interval))
+                next_date = last_date + timedelta(days=avg_interval)
                 while next_date < week_start:
-                    next_date += timedelta(days=round(avg_interval))
+                    next_date += timedelta(days=avg_interval)
                 if week_start <= next_date <= week_end:
                     week_income += inc['avg_amount']
             else:
