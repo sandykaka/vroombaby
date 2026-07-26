@@ -25,6 +25,7 @@ urlpatterns = [
     path('', include('business.urls')),
     path('shopright/', include('shopright.urls')),  # ShopRight grocery app API
     path('shillak/', include('shillak.urls')),  # Shillak family finance app API
+    path('castmute/', include('castmute.urls')),  # CastMute support/privacy/marketing pages
     path('admin/', admin.site.urls),
     path('login/', auth_views.LoginView.as_view(), name='login'),
     path('logout/', auth_views.LogoutView.as_view(), name='logout'),

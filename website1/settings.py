@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'vroombaby',
     'shopright',  # New grocery shopping assistant app
     'shillak',  # Family finance autopilot app
+    'castmute',  # Cast ad-muting app (support/privacy/marketing pages)
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
