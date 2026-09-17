@@ -1,6 +1,6 @@
 {
   "_comment": "The only thing that publishes a release. See README.md.",
-  "version": "1.0.1",
-  "url": "https://github.com/sandykaka/vroombaby/releases/download/fw-1.0.1/castmute-1.0.1.bin",
-  "sha256": "34255fe0308a5a7706d33195a3a97c4eb5f5c727c3b1b9d684df2ecbbfd2801d"
+  "version": "1.0.5",
+  "url": "https://github.com/sandykaka/vroombaby/releases/download/fw-1.0.5/castmute-1.0.5.bin",
+  "sha256": "3a87a1414b93dbb4fe6877a7bc02c7eb41d52e71b54ec8a2f2f036b626634962"
 }
