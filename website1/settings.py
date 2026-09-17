@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 # Load .env file
 load_dotenv()
 
@@ -27,7 +29,30 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # See https://docs.djangoproject.com/en/2.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = ')1x1+(1p0x*=8_0lfcn8^6!*#6ri-9zavxi14@nyug%!pa5k0m'
+#
+# Read from the environment, never committed. The previous value was hardcoded here and
+# this repository is public, which meant anyone could forge session cookies and sign in
+# as any user including admin, forge password-reset tokens, and tamper with any signed
+# value. It is in git history permanently, so it has been rotated rather than merely
+# moved — deleting a leaked secret does not unleak it.
+#
+# Deliberately raises rather than falling back to a default. A silent fallback is how a
+# production site ends up running on a key that is in a public repo, which is exactly
+# the situation being fixed. Set it on the server before deploying this.
+#
+# Generate one with:
+#   python3 -c 'from django.core.management.utils import get_random_secret_key as k; print(k())'
+#
+# No SECRET_KEY_FALLBACKS is configured on purpose: the old key is compromised, so
+# invalidating every existing session and reset link is the intended outcome.
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    raise ImproperlyConfigured(
+        'DJANGO_SECRET_KEY is not set. Generate one with:\n'
+        "  python3 -c 'from django.core.management.utils import "
+        "get_random_secret_key as k; print(k())'\n"
+        'then export it (locally) or set it in the service environment (on the server).'
+    )
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False  # Enable for development to serve media files
@@ -208,16 +233,16 @@ LOGGING = {
         },
         'file': {
             'class': 'logging.handlers.RotatingFileHandler',
-            'filename': '/home/ubuntu/vroombaby/logs/django_error.log',
-            # 'filename': '/Users/sandeshkakade/gitRepos/vroombaby/logs/django_error.log',
+#             'filename': '/home/ubuntu/vroombaby/logs/django_error.log',
+            'filename': '/Users/sandeshkakade/gitRepos/vroombaby/logs/django_error.log',
             'maxBytes': 10 * 1024 * 1024,  # 10MB
             'backupCount': 5,
             'formatter': 'verbose',
         },
         'file_debug': {
             'class': 'logging.handlers.RotatingFileHandler',
-            'filename': '/home/ubuntu/vroombaby/logs/django_debug.log',
-            # 'filename': '/Users/sandeshkakade/gitRepos/vroombaby/logs/django_debug.log',
+#             'filename': '/home/ubuntu/vroombaby/logs/django_debug.log',
+            'filename': '/Users/sandeshkakade/gitRepos/vroombaby/logs/django_debug.log',
             'maxBytes': 10 * 1024 * 1024,  # 10MB
             'backupCount': 3,
             'formatter': 'simple',
