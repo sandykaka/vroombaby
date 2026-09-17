@@ -27,6 +27,17 @@ UNRELEASED_VERSION = '0.0.0'
 
 _SHA256_RE = re.compile(r'^[0-9a-f]{64}$')
 
+# Digits and dots, optionally prefixed with v and optionally carrying a build or
+# pre-release suffix. Validated for the same reason the url and digest are: a typo should
+# surface in our own logs, not as a fleet-wide misbehaviour. A non-numeric version
+# compares as 0 in the firmware, so "abc" would silently mean "never update", while a
+# bare "999" would force every unit to download at once.
+#
+# The suffix is allowed on purpose, to match what cast_version.c actually accepts — it
+# skips to the next dot, so "1.0.0-rc1" and "1.0.0+build.5" both compare as 1.0.0.
+# Rejecting them here would make release candidates impossible to publish.
+_VERSION_RE = re.compile(r'^v?\d+(\.\d+){0,3}([-+][0-9A-Za-z.\-]+)?$')
+
 
 def release_file():
     """Path to the marker naming the current release.
@@ -54,11 +65,22 @@ def current_release():
         logger.exception('CastMute: %s is unreadable', marker)
         return None
 
+    # Valid JSON that isn't an object would raise AttributeError out of .get() below,
+    # turning a typo into a 500 and contradicting the promise made just above.
+    if not isinstance(current, dict):
+        logger.error('CastMute: %s is not a JSON object', marker)
+        return None
+
     version = str(current.get('version') or '').strip()
     url = str(current.get('url') or '').strip()
     digest = str(current.get('sha256') or '').strip().lower()
 
     if not version or version == UNRELEASED_VERSION:
+        return None
+
+    if not _VERSION_RE.match(version):
+        logger.error('CastMute: release version %r is not a dotted number; refusing to '
+                     'publish it', version)
         return None
 
     # Checked here so a typo surfaces in our own logs rather than as every unit in
