@@ -75,3 +75,36 @@ ENV/
 
 # Claude Code configuration
 CLAUDE.md
+
+# ---------------------------------------------------------------------------
+# Credentials. This repository is public, so anything matching these patterns
+# would be published the moment it was staged.
+#
+# Nothing here has ever been committed — verified with `git ls-files` — but until
+# now the only safeguard was remembering to stage explicit paths, across a working
+# tree with roughly 1,700 untracked files. A single `git add -A` would have
+# published live Firebase credentials for four separate apps. That is a habit
+# standing in for a rule; this is the rule.
+#
+# If one of these ever does get committed, adding it here afterwards does NOT
+# help — git keeps the blob forever. Rotate the credential instead, as was
+# necessary for SECRET_KEY.
+*service_account_key.json
+*serviceAccountKey.json
+service-account*.json
+*.pem
+*.p8
+*.p12
+*.key
+!staticfiles/**/*.key
+
+# The development database. Contains real user rows, and is regenerated locally
+# from migrations anyway.
+db.sqlite3
+*.sqlite3
+*.sqlite
+
+# Secrets loaded by load_dotenv(). .env is already ignored above; these catch the
+# variants people reach for when juggling environments.
+.env.*
+!.env.example
