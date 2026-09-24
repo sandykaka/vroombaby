@@ -1,84 +1,105 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CastMute - Support</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f9f9f9;
-        }
-        .container {
-            background-color: white;
-            padding: 40px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        h1 { color: #F58229; border-bottom: 3px solid #F58229; padding-bottom: 10px; }
-        h2 { color: #d46a15; margin-top: 30px; }
-        .highlight { background-color: #fdf3ea; padding: 15px; border-left: 4px solid #F58229; margin: 20px 0; }
-        .faq { margin-bottom: 20px; }
-        .faq h3 { color: #333; margin-bottom: 5px; }
-        .faq p { color: #666; }
-        .contact { background-color: #fdf3ea; padding: 15px; border-left: 4px solid #F58229; margin-top: 30px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>CastMute Support</h1>
+{% extends "castmute/base.html" %}
 
-        <div class="highlight">
-            <p>Need help with CastMute? We're here for you. Check the FAQs below or contact us directly.</p>
-        </div>
+{% comment %}
+Rewritten for the hardware. The old version answered questions about an app — battery drain,
+"Settings > CastMute > Local Network", whether you need to keep it open — none of which
+exist for a box plugged into a charger.
 
-        <h2>Frequently Asked Questions</h2>
+The last section matters more than it looks. The device's status page already computes
+everything needed to diagnose a fault, and asking for those numbers up front turns "it
+doesn't work" into something answerable without a second round of email.
+{% endcomment %}
 
-        <div class="faq">
-            <h3>How does CastMute work?</h3>
-            <p>Cast a show from your iPhone to your Chromecast or Cast-enabled TV, then open CastMute. It automatically connects to the TV that's casting and mutes the TV during ad breaks — then unmutes the moment your show resumes.</p>
-        </div>
+{% block title %}CastMute — Support{% endblock %}
+{% block description %}Setting up CastMute, what the light means, and how to get a problem looked at.{% endblock %}
 
-        <div class="faq">
-            <h3>Why don't I see my TV?</h3>
-            <p>Make sure your phone and TV are on the same Wi-Fi network, your TV is on, and CastMute has Local Network access (Settings &gt; CastMute &gt; Local Network). Then cast a show and pull down to refresh the device list.</p>
-        </div>
+{% block content %}
 
-        <div class="faq">
-            <h3>Which streaming apps work?</h3>
-            <p>CastMute works with many popular ad-supported streaming apps that you cast from your phone. Some services stitch ads directly into the video stream, and those ads can't be detected or muted.</p>
-        </div>
+<h2>Support</h2>
+<p class="muted">Everything the device knows about itself is on its own status page at
+<code>http://castmute.local</code>, reachable from any phone or computer on the same Wi-Fi.
+Start there.</p>
 
-        <div class="faq">
-            <h3>Does it work with my TV's built-in apps?</h3>
-            <p>CastMute only works when you cast <em>from your phone</em> to the TV. Apps opened directly on the TV, or services that use their own casting method instead of Google Cast, won't be detected.</p>
-        </div>
+<h2>What the light means</h2>
+<table class="key">
+  <tr><td>Green</td><td>Watching. Everything is normal.</td></tr>
+  <tr><td>Green flash</td><td>Muting an ad break right now.</td></tr>
+  <tr><td>Purple</td><td>No Cast device found.</td></tr>
+  <tr><td>Blue</td><td>Joining Wi-Fi.</td></tr>
+  <tr><td>Red</td><td>Cannot join Wi-Fi — usually a wrong password.</td></tr>
+  <tr><td>Amber</td><td>Waiting to be set up.</td></tr>
+</table>
 
-        <div class="faq">
-            <h3>Do I need to keep the app open?</h3>
-            <p>Open CastMute when you start watching. It keeps muting ads even in the background during that viewing session. To save battery, it stops when you leave Wi-Fi or the cast ends — just reopen it next time you watch.</p>
-        </div>
+<h3>The light is purple</h3>
+<p>It joined your Wi-Fi but found no televisions. Check the TV is switched on, that it is a
+Chromecast or has Chromecast built in, and that it is on the same network as CastMute — a
+guest network or a separate band counts as a different network on many routers.</p>
+<p>Some mesh routers block the discovery messages CastMute uses. If the TV is definitely
+there, open the status page and add its IP address by hand under
+<strong>Add a TV by hand</strong>. You will find the address in your router's device list.</p>
 
-        <div class="faq">
-            <h3>Does CastMute drain my battery?</h3>
-            <p>It only stays active while you're actually watching. When nothing is casting or you leave your Wi-Fi, it goes to sleep so it isn't running in the background all day.</p>
-        </div>
+<h3>The light is red</h3>
+<p>Wrong Wi-Fi password, nine times in ten. Hold a paperclip in the reset pinhole for five
+seconds to start setup again. It also goes red if the router is rebooting, in which case it
+recovers on its own.</p>
 
-        <div class="faq">
-            <h3>Does CastMute collect my data?</h3>
-            <p>No. CastMute has no account, no sign-up, and collects no personal data. It only talks to your TV on your local network.</p>
-        </div>
+<h3>I can't open castmute.local</h3>
+<p>Some Android phones and a few routers do not resolve <code>.local</code> names. Find the
+device's IP address in your router's device list and type that into the browser instead.</p>
+<p>If you have <em>two</em> CastMutes on one network they will both answer to
+<code>castmute.local</code> and only one of them wins. Use IP addresses to tell them apart.
+One box already covers several televisions, so a second one is rarely needed.</p>
 
-        <div class="contact">
-            <h2>Contact Us</h2>
-            <p><strong>Email:</strong> <a href="mailto:ssvkakade@gmail.com" style="color: #F58229;">ssvkakade@gmail.com</a><br>
-            <strong>Response Time:</strong> Within 24 hours</p>
-        </div>
-    </div>
-</body>
-</html>
+<h3>Ads aren't being muted</h3>
+<p>Check the light is green and the TV appears on the status page. Then check the service:
+CastMute recognises ad breaks on <strong>Disney+, Prime Video, Hulu and YouTube</strong>.
+Where a service stitches its ads into the video stream, nothing outside that app can tell an
+ad from the programme, and CastMute cannot help.</p>
+<p>It also only works when you <em>cast</em> to the TV from a phone, tablet or laptop. An app
+you open with the TV's own remote is invisible to it.</p>
+
+<h3>It muted my programme, or didn't unmute</h3>
+<p>Worth reporting — that is a bug, not a setting. Send the details in the last section
+below, along with the service and roughly when it happened.</p>
+<p>If you mute the TV yourself, CastMute notices and leaves your mute alone rather than
+fighting you for the volume.</p>
+
+<h3>Moving it to a different Wi-Fi network</h3>
+<p>Open the status page and use <strong>Change Wi-Fi network</strong> at the bottom. The
+device forgets the old network and restarts into setup mode with an amber light.</p>
+
+<h3>Resetting it</h3>
+<p>There is a small hole in the lid. With the device <strong>already plugged in</strong>,
+push a paperclip in and hold for five seconds — the light blips while it counts, then flashes
+three times and restarts into setup mode.</p>
+<div class="callout">
+  <p><strong>Hold it while it is already running, not while plugging it in.</strong> Pressing
+  that button as power arrives puts the chip into a firmware loading mode, where it looks
+  dead and does nothing. Unplug it and plug it back in without pressing anything and it
+  recovers.</p>
+</div>
+
+<h3>Updates</h3>
+<p>Automatic. It checks twice a day and installs anything newer. If an update fails to start
+up properly the device falls back to the previous version by itself, so a bad release cannot
+leave you with a dead box. The version it is running is shown on the status page.</p>
+
+<h3>Power</h3>
+<p>Any USB charger. It draws well under a watt — leave it plugged in permanently. There is no
+battery and no power switch.</p>
+
+<h2>Reporting a problem</h2>
+<p>Open <code>http://castmute.local</code>, scroll to <strong>Device</strong>, and copy all of
+it into an email. Those numbers answer most of what I would otherwise have to ask you:</p>
+<ul class="plain">
+  <li><strong>Firmware</strong> — the version, and which of the two slots it booted from</li>
+  <li><strong>Free memory, Largest block, Lowest ever</strong> — whether it is running out of
+  room, which the first two numbers alone can hide</li>
+  <li><strong>Reconnects, Frames skipped</strong> — how stable its connection to the TVs is</li>
+  <li><strong>Wi-Fi signal, Worst seen</strong> — nearly every odd symptom traces back to
+  these two</li>
+</ul>
+<p>Then tell me what you expected and what happened instead, which service, and which TV.</p>
+<p><a href="mailto:ssvkakade@gmail.com?subject=CastMute%20support">ssvkakade@gmail.com</a></p>
+
+{% endblock %}

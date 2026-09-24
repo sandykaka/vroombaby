@@ -1,61 +1,102 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CastMute - Privacy Policy</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f9f9f9;
-        }
-        .container {
-            background-color: white;
-            padding: 40px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        h1 { color: #F58229; border-bottom: 3px solid #F58229; padding-bottom: 10px; }
-        h2 { color: #d46a15; margin-top: 30px; }
-        .highlight { background-color: #fdf3ea; padding: 15px; border-left: 4px solid #F58229; margin: 20px 0; }
-        p { color: #444; }
-        .contact { background-color: #fdf3ea; padding: 15px; border-left: 4px solid #F58229; margin-top: 30px; }
-        .updated { color: #888; font-size: 0.9em; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>CastMute Privacy Policy</h1>
-        <p class="updated">Last updated: July 2026</p>
+{% extends "castmute/base.html" %}
 
-        <div class="highlight">
-            <p><strong>CastMute does not collect, store, or share any personal data.</strong> There are no accounts, no sign-ups, no analytics, and no tracking.</p>
-        </div>
+{% comment %}
+Rewritten because the previous version was no longer true.
 
-        <h2>What we collect</h2>
-        <p>Nothing. CastMute has no user accounts and does not gather, transmit, or store any personal information. No usage data or identifiers are sent to us or to any third party.</p>
+It said "Nothing. ... No usage data or identifiers are sent to us or to any third party" and
+"It does not integrate with any external services". Both were written for an iPhone app. The
+hardware asks this server for a firmware manifest every twelve hours, and castmute/views.py
+logs the requesting IP address and the running version on purpose — that log line is the
+only visibility into a fleet that otherwise never phones home. Firmware images are hosted on
+GitHub Releases, so GitHub sees those addresses too.
 
-        <h2>Local Network access</h2>
-        <p>CastMute uses your device's Local Network permission solely to discover and control the TV or Cast device you are casting to on your own Wi-Fi network. This communication stays entirely on your local network — it is never sent to us or anyone else.</p>
+A privacy policy that contradicts the server's own log file is worse than a longer one that
+does not. The honest version is still a strong story; it is just accurate.
 
-        <h2>Third parties</h2>
-        <p>CastMute includes no advertising, no analytics SDKs, and no third-party tracking. It does not integrate with any external services.</p>
+RETENTION: the ninety-day figure below is a promise about log rotation on the server. If
+that is not configured, the sentence is false — fix the server, not the sentence.
+{% endcomment %}
 
-        <h2>Children's privacy</h2>
-        <p>CastMute does not collect any data from anyone, including children.</p>
+{% block title %}CastMute — Privacy{% endblock %}
+{% block description %}What the CastMute device sends, what it does not, and what is kept.{% endblock %}
 
-        <h2>Changes to this policy</h2>
-        <p>If this policy changes, the updated version will be posted on this page.</p>
+{% block content %}
 
-        <div class="contact">
-            <h2>Contact Us</h2>
-            <p><strong>Email:</strong> <a href="mailto:ssvkakade@gmail.com" style="color: #F58229;">ssvkakade@gmail.com</a></p>
-        </div>
-    </div>
-</body>
-</html>
+<h2>Privacy</h2>
+<p class="muted small">Last updated: September 2026</p>
+
+<div class="callout">
+  <p>There is no account, no sign-up and no app. Nothing you watch, and nothing about what
+  you watch, ever leaves your home.</p>
+  <p>Exactly one request goes out to the internet: twice a day the device asks whether newer
+  firmware exists. Everything below is a description of that request.</p>
+</div>
+
+<h2>What stays on your network</h2>
+<ul class="plain">
+  <li><strong>Talking to your televisions.</strong> CastMute connects to Cast devices on
+  your own Wi-Fi to see whether an ad break is playing and to set the volume. That traffic
+  never leaves your network and is not recorded anywhere.</li>
+
+  <li><strong>What you are watching.</strong> The device can see which app is casting and
+  whether an ad is on. It is used to decide whether to mute, and then discarded. It is not
+  stored, not counted and not transmitted.</li>
+
+  <li><strong>Your Wi-Fi password.</strong> Entered once during setup and saved on the
+  device itself. It is never sent to us. Note that it is stored unencrypted in the device's
+  own flash memory, so treat a CastMute like any other device holding your network
+  credentials — hold the reset pinhole for five seconds to erase it before giving one
+  away.</li>
+
+  <li><strong>The status page.</strong> <code>http://castmute.local</code> is served by the
+  device, on your network. Nothing on it is reported to us.</li>
+</ul>
+
+<h2>What leaves your network</h2>
+<p>Every twelve hours, give or take half an hour, the device asks this address whether newer
+firmware is available:</p>
+<p><code>https://www.vroombaby.com/castmute/firmware/manifest.json</code></p>
+<p>That request necessarily carries your <strong>public IP address</strong> — as any web
+request does — and the <strong>firmware version</strong> the device is currently running.
+Both are written to this server's logs.</p>
+<p>If an update is available, the firmware image is downloaded from <strong>GitHub
+Releases</strong>, which means GitHub also receives your public IP address. GitHub's handling
+of that is covered by their own privacy statement.</p>
+<p>That is the complete list. There is no other outbound connection, no telemetry, no
+crash reporting and no analytics of any kind.</p>
+
+<h2>Why that is logged at all</h2>
+<p>Because a firmware update that breaks something has to be noticed. Knowing roughly how
+many units exist and which versions they are on is what makes it safe to publish an update
+at all — otherwise a bad release would be discovered only when somebody emailed to complain.</p>
+<p>It is not used to build a profile of you, is never sold, and is not shared with anybody.
+The addresses are not linked to a name, an email address or an account, because none of
+those exist.</p>
+
+<h2>How long it is kept</h2>
+<p>Server logs containing these addresses are rotated and deleted within ninety days. They
+are not copied anywhere else beforehand.</p>
+
+<h2>Turning it off</h2>
+<p>Update checking is the one thing that leaves your network, and it is also the only way a
+fault can be fixed once the device is in your house. If you would rather it never contacted
+anything, the firmware is open and can be built with the update URL left empty — the device
+then talks to nothing but your own televisions, and stays on whatever version you flashed.</p>
+
+<h2>This website</h2>
+<p>These pages load nothing from anywhere else. No analytics, no advertising, no tracking
+pixels, no fonts or scripts from other companies — the styling is part of the page itself,
+and the only script is a few lines written into the front page to fade sections in as you
+scroll. They set no cookies to identify you. Ordinary web server request logs apply, on the
+same ninety-day rotation.</p>
+
+<h2>Children</h2>
+<p>CastMute has no accounts and collects no personal details from anyone, of any age.</p>
+
+<h2>Changes</h2>
+<p>If any of the above changes, this page changes with it, and the date at the top moves.</p>
+
+<h2>Contact</h2>
+<p><a href="mailto:ssvkakade@gmail.com?subject=CastMute%20privacy">ssvkakade@gmail.com</a></p>
+
+{% endblock %}

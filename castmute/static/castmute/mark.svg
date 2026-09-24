@@ -1,0 +1,29 @@
+<!-- CastMute mark: a Cast screen with a slash through it.
+
+     Vector on purpose. The artwork exists as a 1024x1024 PNG for the website and any
+     future app icon, but that file is just over 1MB and embedding it in firmware would
+     cost the same in flash and add a megabyte to every over-the-air download. Redrawn as
+     geometry it is under a kilobyte, and it stays crisp at 16px in a browser tab where a
+     downscaled photo-style PNG turns to mush.
+
+     Coordinates are in a 64-unit square. The slash is drawn twice: once in black into the
+     mask, eleven units wide, which knocks a clean gap out of the screen and the arcs; then
+     again in white, four units wide, centred in that gap. That gap is what makes the mark
+     read as "off" rather than as a line laid on top of a picture.
+
+     Kept as a file rather than a C string literal so there is one copy of the artwork.
+     CMakeLists.txt pulls it in with EMBED_FILES and cast_status.c serves those bytes. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" fill="#FE8128"/>
+<mask id="s" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+<rect width="64" height="64" fill="#fff"/>
+<path d="M4 60 60 4" stroke="#000" stroke-width="11"/>
+</mask>
+<g mask="url(#s)" fill="none" stroke="#fff" stroke-width="4">
+<path d="M13 21v-2.5A4.5 4.5 0 0 1 17.5 14h30a4.5 4.5 0 0 1 4.5 4.5v21a4.5 4.5 0 0 1-4.5 4.5H36"/>
+<path d="M13 37A7 7 0 0 1 20 44"/>
+<path d="M13 30A14 14 0 0 1 27 44"/>
+<path d="M13 23A21 21 0 0 1 34 44"/>
+</g>
+<path d="M7 57 57 7" stroke="#fff" stroke-width="4.4"/>
+</svg>

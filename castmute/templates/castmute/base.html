@@ -1,0 +1,226 @@
+{% load static %}<!DOCTYPE html>
+{% comment %}
+Shared shell for the three CastMute pages.
+
+They were three standalone files with the same CSS block copied into each, which is how
+the orange drifted to two different values and how the pages ended up describing an iPhone
+app long after the product became a piece of hardware. One shell, three pages.
+
+Deliberately not extending the site-wide templates/base.html: CastMute is its own product
+and gets no vroombaby navigation, no Bootstrap and no third-party scripts. The privacy page
+promises exactly that, so it has to be structurally true rather than a habit.
+{% endcomment %}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}CastMute{% endblock %}</title>
+<meta name="description" content="{% block description %}A small box that mutes your TV during ad breaks while you cast, then unmutes when your show comes back.{% endblock %}">
+<link rel="icon" href="{% static 'castmute/mark.svg' %}">
+<style>
+/* One source for the orange. It is #FE8128 because that is what the firmware serves as
+   its own favicon and what an eventual enclosure would be matched to — the hard-to-change
+   copy wins, and the CSS follows it. */
+:root {
+  --accent: #FE8128;
+  --accent-ink: #c25f13;
+  --ink: #1d1d1f;
+  --ink-2: #6e6e73;
+  --bg: #ffffff;
+  --bg-2: #fbfbfd;
+  --line: #e6e6eb;
+  --card: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #FF9447;
+    --accent-ink: #FFB07A;
+    --ink: #f5f5f7;
+    --ink-2: #a1a1a6;
+    --bg: #000000;
+    --bg-2: #111113;
+    --line: #2c2c2e;
+    --card: #18181b;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+a { color: var(--accent-ink); }
+
+.top {
+  border-bottom: 1px solid var(--line);
+  padding: 12px 24px;
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+}
+.brand img { border-radius: 7px; display: block; }
+
+.hero {
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  padding: 64px 24px 56px;
+  text-align: center;
+}
+/* The mark as a rounded tile rather than full-bleed orange. The artwork carries its own
+   orange background, so putting it on an orange hero would make the square disappear. */
+.hero img {
+  width: 88px;
+  height: 88px;
+  border-radius: 20px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .16);
+  display: block;
+  margin: 0 auto 26px;
+}
+.hero h1 {
+  font-size: 42px;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  margin: 0 0 14px;
+}
+.hero p.lede {
+  font-size: 20px;
+  color: var(--ink-2);
+  max-width: 34em;
+  margin: 0 auto;
+}
+
+.wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 8px; }
+h2 {
+  font-size: 27px;
+  letter-spacing: -0.01em;
+  margin: 48px 0 14px;
+}
+h2:first-child { margin-top: 0; }
+h3 { font-size: 18px; margin: 28px 0 6px; }
+p { margin: 0 0 14px; }
+.muted { color: var(--ink-2); }
+.small { font-size: 14px; }
+
+ol.steps, ul.plain { padding-left: 22px; }
+ol.steps li, ul.plain li { margin-bottom: 12px; }
+ul.plain { list-style: none; padding-left: 0; }
+ul.plain li { padding-left: 0; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
+  margin-top: 24px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 20px;
+}
+.card h3 { margin: 0 0 6px; font-size: 16px; }
+.card p { margin: 0; color: var(--ink-2); font-size: 15px; }
+
+/* For the things a buyer must know before they spend money. Given a box of its own
+   because burying them in body copy is how you earn a refund request. */
+.callout {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  background: var(--bg-2);
+  padding: 18px 20px;
+  margin: 24px 0;
+}
+.callout p:last-child, .callout ul:last-child { margin-bottom: 0; }
+.callout strong { color: var(--ink); }
+
+/* The LED key, repeated from the device's own status page. */
+table.key { border-collapse: collapse; width: 100%; font-size: 15px; }
+table.key td { padding: 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.key tr:last-child td { border-bottom: 0; }
+table.key td:first-child { width: 11em; font-weight: 600; }
+
+code, kbd {
+  font: 0.92em/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+footer {
+  margin-top: 64px;
+  border-top: 1px solid var(--line);
+  padding: 28px 24px 56px;
+  text-align: center;
+  color: var(--ink-2);
+  font-size: 14px;
+}
+footer a { margin: 0 8px; }
+
+@media (max-width: 520px) {
+  .hero { padding: 44px 20px 40px; }
+  .hero h1 { font-size: 32px; }
+  .hero p.lede { font-size: 18px; }
+  h2 { font-size: 23px; }
+}
+</style>
+{% comment %}
+Product pages add their own stylesheet here rather than forking this file. The tokens above
+(--accent, --ink, the dark-mode block) stay shared, so a redesign of the front page cannot
+drift the orange away from what the firmware serves as its own favicon.
+{% endcomment %}
+{% block extra_css %}{% endblock %}
+</head>
+<body>
+
+{% comment %}
+Overridable so a full-bleed product page can supply its own navigation, or none. Documents
+like Support and Privacy keep the plain bar below.
+{% endcomment %}
+{% block nav %}
+<header class="top">
+  <a class="brand" href="{% url 'castmute:marketing' %}">
+    <img src="{% static 'castmute/mark.svg' %}" alt="" width="28" height="28">
+    <span>CastMute</span>
+  </a>
+</header>
+{% endblock %}
+
+{% block hero %}{% endblock %}
+
+{% comment %}
+Two ways in. Document pages fill `content` and get the 720px measure for free; a page that
+needs edge-to-edge sections overrides `main` and takes responsibility for its own layout.
+{% endcomment %}
+{% block main %}
+<main class="wrap">
+{% block content %}{% endblock %}
+</main>
+{% endblock %}
+
+<footer>
+  <p>
+    <a href="{% url 'castmute:marketing' %}">Overview</a> ·
+    <a href="{% url 'castmute:support' %}">Support</a> ·
+    <a href="{% url 'castmute:privacy' %}">Privacy</a>
+  </p>
+  <p class="small">© 2026 Sandesh Kakade. Not affiliated with, endorsed by or sponsored by
+  Google, any streaming service or any television manufacturer. Chromecast and Google Cast
+  are trademarks of Google LLC. All other trademarks belong to their respective owners.</p>
+</footer>
+
+</body>
+</html>

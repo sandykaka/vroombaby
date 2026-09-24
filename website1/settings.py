@@ -58,8 +58,24 @@ if not SECRET_KEY:
 DEBUG = False  # Enable for development to serve media files
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', '172.20.10.2', 'www.vroombaby.com', 'vroombaby.com', '44.214.122.27', '192.168.12.66', '192.168.86.32',
-                 'www.schoolconvo.com', 'schoolconvo.com', 'www.coffeewithexpert.com', 'coffeewithexpert.com']
+                 'www.schoolconvo.com', 'schoolconvo.com', 'www.coffeewithexpert.com', 'coffeewithexpert.com',
+                 # CastMute has its own site rather than an alias of this one; see
+                 # website1/middleware.py. fw. is the firmware update channel, which is
+                 # compiled into shipped devices and can never be renamed.
+                 'castmute.com', 'www.castmute.com', 'fw.castmute.com']
 # ALLOWED_HOSTS = []
+
+# Only ever widens what CSRF accepts — a request whose Origin matches its own host is still
+# trusted without being listed here, so adding these cannot reject anything that works
+# today. Listed now because a POST from a domain that is absent from here fails with an
+# opaque 403 on Django 4+, and the first form added to castmute.com should not have to
+# rediscover that.
+CSRF_TRUSTED_ORIGINS = [
+    'https://castmute.com',
+    'https://www.castmute.com',
+    'https://www.vroombaby.com',
+    'https://vroombaby.com',
+]
 
 # File upload settings for receipt images
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10MB (default is 2.5MB)
@@ -85,6 +101,10 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
+    # Must sit above CommonMiddleware: that one resolves paths itself for APPEND_SLASH,
+    # so the URLconf has to be chosen before it runs. Below WhiteNoise because static
+    # files never need a URLconf at all.
+    'website1.middleware.HostUrlconfMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
