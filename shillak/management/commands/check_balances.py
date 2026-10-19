@@ -71,6 +71,7 @@ class Command(BaseCommand):
                     plaid_accounts = plaid_service.get_account_balances(
                         item.access_token
                     )
+                    plaid_service.clear_reauth(item)
 
                     for acct_data in plaid_accounts:
                         balance = Decimal(str(acct_data['balance_current']))
@@ -127,6 +128,11 @@ class Command(BaseCommand):
                         total_alerts += 1
 
                 except Exception as e:
+                    if not dry_run and plaid_service.flag_reauth_if_needed(item, e):
+                        self.stderr.write(
+                            f"  {item.institution_name} needs re-auth (owner notified)"
+                        )
+                        continue
                     logger.error(f"Failed to check item {item.item_id}: {e}")
                     self.stderr.write(
                         f"Error checking {item.institution_name}: {e}"

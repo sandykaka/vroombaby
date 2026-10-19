@@ -20,6 +20,7 @@ import logging
 from django.core.management.base import BaseCommand
 
 from shillak.models import Home, PlaidItem
+from shillak.services import plaid_service
 from shillak.services.cashflow_service import analyze_cashflow, sync_transactions
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,11 @@ class Command(BaseCommand):
                         f"  Synced {count} transactions from {item.institution_name}"
                     )
                 except Exception as e:
+                    if not dry_run and plaid_service.flag_reauth_if_needed(item, e):
+                        self.stderr.write(
+                            f"  {item.institution_name} needs re-auth (owner notified)"
+                        )
+                        continue
                     self.stderr.write(f"  Error syncing {item.institution_name}: {e}")
 
             # Step 2: AI analysis

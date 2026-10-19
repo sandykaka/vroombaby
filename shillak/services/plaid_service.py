@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import date, timedelta
 
@@ -15,6 +16,8 @@ from plaid.model.transactions_get_request import TransactionsGetRequest
 from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
 
 from django.conf import settings
+
+from shillak.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -46,21 +49,66 @@ def get_plaid_client():
     return _client
 
 
-def create_link_token(user_id):
-    """Create a Plaid Link token for the iOS app."""
+def create_link_token(user_id, access_token=None):
+    """Create a Plaid Link token for the iOS app.
+
+    Pass access_token to open Link in update mode, which re-authenticates an
+    existing item instead of linking a new one.
+    """
     client = get_plaid_client()
 
-    request = LinkTokenCreateRequest(
+    params = dict(
         user=LinkTokenCreateRequestUser(client_user_id=str(user_id)),
         client_name='Shillak',
         language='en',
         country_codes=[CountryCode('US')],
-        products=[Products('auth'), Products('transactions')],
     )
+    if access_token:
+        # Update mode: products must be omitted
+        params['access_token'] = access_token
+    else:
+        params['products'] = [Products('auth'), Products('transactions')]
 
-    response = client.link_token_create(request)
-    logger.info(f"Link token created for user {user_id}")
+    response = client.link_token_create(LinkTokenCreateRequest(**params))
+    mode = 'update' if access_token else 'new'
+    logger.info(f"Link token created for user {user_id} ({mode})")
     return response.link_token
+
+
+def is_login_required(error):
+    """True if a Plaid error means the user must re-authenticate via Link."""
+    if not isinstance(error, plaid.ApiException):
+        return False
+    try:
+        body = json.loads(error.body)
+    except (TypeError, ValueError):
+        return False
+    return body.get('error_code') == 'ITEM_LOGIN_REQUIRED'
+
+
+def flag_reauth_if_needed(plaid_item, error):
+    """Mark an item as needing re-auth and notify its owner once.
+
+    Returns True if the error was a login-required error.
+    """
+    if not is_login_required(error):
+        return False
+
+    if not plaid_item.needs_reauth:
+        plaid_item.needs_reauth = True
+        plaid_item.save(update_fields=['needs_reauth'])
+        logger.warning(f"Item {plaid_item.item_id} ({plaid_item.institution_name}) needs re-auth")
+        NotificationService.send_reauth_alert(plaid_item)
+
+    return True
+
+
+def clear_reauth(plaid_item):
+    """Clear the re-auth flag after a successful Plaid call."""
+    if plaid_item.needs_reauth:
+        plaid_item.needs_reauth = False
+        plaid_item.save(update_fields=['needs_reauth'])
+        logger.info(f"Item {plaid_item.item_id} ({plaid_item.institution_name}) reconnected")
 
 
 def exchange_public_token(public_token):

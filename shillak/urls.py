@@ -24,6 +24,7 @@ urlpatterns = [
     # Plaid bank linking
     path('api/plaid/create-link-token/', views.create_link_token_api, name='create_link_token'),
     path('api/plaid/exchange-token/', views.exchange_token_api, name='exchange_token'),
+    path('api/plaid/reauth-complete/', views.reauth_complete_api, name='reauth_complete'),
 
     # Bank accounts
     path('api/accounts/', views.accounts_api, name='accounts'),

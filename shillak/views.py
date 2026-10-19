@@ -485,12 +485,29 @@ def delete_account_api(request):
 @csrf_exempt
 @require_firebase_auth
 def create_link_token_api(request):
-    """Create a Plaid Link token for the iOS client."""
+    """Create a Plaid Link token for the iOS client.
+
+    Optional body {"plaid_item_id": <id>} returns an update-mode token for
+    reconnecting an existing bank instead of linking a new one.
+    """
     if request.method != 'POST':
         return JsonResponse({'error': 'Only POST allowed'}, status=405)
 
     try:
-        link_token = plaid_service.create_link_token(request.user.id)
+        data = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    access_token = None
+    plaid_item_id = data.get('plaid_item_id')
+    if plaid_item_id:
+        item = PlaidItem.objects.filter(id=plaid_item_id, user=request.user).first()
+        if not item:
+            return JsonResponse({'error': 'Bank connection not found'}, status=404)
+        access_token = item.access_token
+
+    try:
+        link_token = plaid_service.create_link_token(request.user.id, access_token=access_token)
         return JsonResponse({'link_token': link_token})
     except Exception as e:
         logger.error(f"Failed to create link token: {e}")
@@ -592,6 +609,43 @@ def exchange_token_api(request):
         return JsonResponse({'error': 'Could not link account'}, status=500)
 
 
+@csrf_exempt
+@require_firebase_auth
+def reauth_complete_api(request):
+    """Called after Plaid Link update mode succeeds. Clears the flag and backfills."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    item = PlaidItem.objects.filter(id=data.get('plaid_item_id'), user=request.user).first()
+    if not item:
+        return JsonResponse({'error': 'Bank connection not found'}, status=404)
+
+    plaid_service.clear_reauth(item)
+
+    def _backfill():
+        try:
+            for acct in plaid_service.get_account_balances(item.access_token):
+                BankAccount.objects.filter(
+                    plaid_account_id=acct['plaid_account_id']
+                ).update(
+                    balance=acct['balance_current'],
+                    balance_available=acct.get('balance_available'),
+                    last_synced_at=timezone.now(),
+                )
+            cashflow_service.sync_transactions(item)
+        except Exception as e:
+            logger.error(f"Backfill after re-auth failed for {item.institution_name}: {e}")
+
+    threading.Thread(target=_backfill, daemon=True).start()
+
+    return JsonResponse({'status': 'reconnected'})
+
+
 @require_firebase_auth
 def accounts_api(request):
     """Get all bank accounts for the user's home."""
@@ -601,7 +655,7 @@ def accounts_api(request):
 
     accounts = BankAccount.objects.filter(
         home=membership.home
-    ).select_related('user').order_by('institution_name', 'account_name')
+    ).select_related('user', 'plaid_item').order_by('institution_name', 'account_name')
 
     return JsonResponse({
         'accounts': [
@@ -618,6 +672,9 @@ def accounts_api(request):
                 'balance_available': str(a.balance_available) if a.balance_available else None,
                 'currency': a.currency,
                 'last_synced_at': a.last_synced_at.isoformat() if a.last_synced_at else None,
+                'plaid_item_id': a.plaid_item_id,
+                'needs_reauth': bool(a.plaid_item and a.plaid_item.needs_reauth),
+                'can_reauth': bool(a.plaid_item and a.plaid_item.user_id == request.user.id),
             }
             for a in accounts
         ]
@@ -652,8 +709,11 @@ def refresh_accounts_api(request):
                 )
                 updated_count += 1
 
+            plaid_service.clear_reauth(item)
+
         except Exception as e:
-            logger.error(f"Failed to refresh item {item.item_id}: {e}")
+            if not plaid_service.flag_reauth_if_needed(item, e):
+                logger.error(f"Failed to refresh item {item.item_id}: {e}")
 
     logger.info(f"Refreshed {updated_count} accounts for home {membership.home.name}")
 
@@ -1070,7 +1130,8 @@ def analyze_cashflow_api(request):
         try:
             cashflow_service.sync_transactions(item)
         except Exception as e:
-            logger.error(f"Failed to sync transactions for {item.institution_name}: {e}")
+            if not plaid_service.flag_reauth_if_needed(item, e):
+                logger.error(f"Failed to sync transactions for {item.institution_name}: {e}")
 
     # Run analysis
     try:

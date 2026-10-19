@@ -82,6 +82,8 @@ class PlaidItem(models.Model):
     access_token = models.CharField(max_length=255)
     institution_name = models.CharField(max_length=100, blank=True, default='')
     institution_id = models.CharField(max_length=100, blank=True, default='')
+    # Set when Plaid returns ITEM_LOGIN_REQUIRED; cleared after Link update mode
+    needs_reauth = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

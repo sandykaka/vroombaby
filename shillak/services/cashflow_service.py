@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 def sync_transactions(plaid_item):
     """Fetch 6 months of transactions from Plaid and cache in DB."""
     transactions = plaid_service.get_transactions(plaid_item.access_token, months=6)
+    plaid_service.clear_reauth(plaid_item)
 
     created = 0
     for txn in transactions:

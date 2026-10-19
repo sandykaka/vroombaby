@@ -102,3 +102,18 @@ class NotificationService:
                 },
                 notification_type='low_balance',
             )
+
+    @staticmethod
+    def send_reauth_alert(plaid_item):
+        """Ask the item owner to reconnect a bank whose login expired."""
+        institution = plaid_item.institution_name or 'your bank'
+        NotificationService.send_notification(
+            user=plaid_item.user,
+            title=f"Reconnect {institution}",
+            body=f"{institution} needs you to sign in again so Shillak can keep your balances and transactions up to date.",
+            data={
+                'plaid_item_id': str(plaid_item.id),
+                'action': 'reconnect_bank',
+            },
+            notification_type='bank_reauth',
+        )
