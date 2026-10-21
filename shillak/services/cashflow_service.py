@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -88,9 +89,6 @@ def _extract_expense_groups(home):
         return
 
     # Send remaining to AI for entity extraction
-    from openai import OpenAI
-    from django.conf import settings
-
     txn_list = [{'id': tid, 'name': name} for tid, name in needs_ai]
 
     prompt = f"""Extract the payee, merchant, or recipient from each transaction name.
@@ -272,7 +270,6 @@ def analyze_cashflow(home, dry_run=False):
         })
 
     # Pre-analyze: group expenses and income by merchant
-    import re
     from collections import defaultdict
 
     def normalize_name(name, merchant=None):
