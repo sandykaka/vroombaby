@@ -18,18 +18,18 @@ that is not configured, the sentence is false — fix the server, not the senten
 {% endcomment %}
 
 {% block title %}CastMute — Privacy{% endblock %}
-{% block description %}What the CastMute device sends, what it does not, and what is kept.{% endblock %}
+{% block description %}What the CastMute device and the CastMute app for Android send, what they do not, and what is kept.{% endblock %}
 
 {% block content %}
 
 <h2>Privacy</h2>
-<p class="muted small">Last updated: September 2026</p>
+<p class="muted small">Last updated: November 2026</p>
 
 <div class="callout">
-  <p>There is no account, no sign-up and no app. Nothing you watch, and nothing about what
-  you watch, ever leaves your home.</p>
-  <p>Exactly one request goes out to the internet: twice a day the device asks whether newer
-  firmware exists. Everything below is a description of that request.</p>
+  <p>There is no account and no sign-up, for the CastMute device or the CastMute app for
+  Android. Nothing you watch, and nothing about what you watch, ever leaves your home.</p>
+  <p>The app makes no internet connections at all. The device makes exactly one: twice a
+  day it asks whether newer firmware exists. Both are described in full below.</p>
 </div>
 
 <h2>What stays on your network</h2>
@@ -83,6 +83,38 @@ fault can be fixed once the device is in your house. If you would rather it neve
 anything, the firmware is open and can be built with the update URL left empty — the device
 then talks to nothing but your own televisions, and stays on whatever version you flashed.</p>
 
+<h2>The CastMute app for Android</h2>
+<p>The app does on your phone what the device does on its own: it finds the Cast TVs on your
+Wi-Fi, watches for ad breaks, and mutes and unmutes them.</p>
+<ul class="plain">
+  <li><strong>It only talks to your televisions.</strong> The app connects to Chromecasts and
+  Cast TVs on your own Wi-Fi network, to see whether an ad break is playing and to set the
+  volume. It makes no connection to the internet, to us or to anyone else.</li>
+
+  <li><strong>What you are watching.</strong> The app can see which app is casting, the title
+  of what is playing and whether an ad is on, so it can decide whether to mute and show you
+  what is happening. It is held in memory while the app runs, never written to storage and
+  never transmitted.</li>
+
+  <li><strong>What it stores.</strong> One setting: whether auto-mute is on. It is saved on
+  your phone, and may be included in your phone's own backup if you have Android backup
+  turned on.</li>
+
+  <li><strong>No data collected.</strong> No account, no analytics, no advertising, no
+  tracking and no crash reporting of our own. Nothing is shared with any third party.</li>
+
+  <li><strong>Permissions.</strong> Network and Wi-Fi access to reach your TVs on your local
+  network; permission to keep running in the background with a notification, so ads are
+  still muted while the app is closed; and permission to keep the phone awake while a TV is
+  casting, so muting still works with the screen off.</li>
+
+  <li><strong>Google Play.</strong> As for every app on Google Play, Google may give us
+  anonymous totals such as install counts, and crash reports from phones whose owners have
+  chosen to share diagnostics with app developers. Google's handling of that is covered by
+  Google's own privacy policy.</li>
+</ul>
+<p>Uninstalling the app removes everything it stored.</p>
+
 <h2>This website</h2>
 <p>These pages load nothing from anywhere else. No analytics, no advertising, no tracking
 pixels, no fonts or scripts from other companies — the styling is part of the page itself,
@@ -91,7 +123,8 @@ scroll. They set no cookies to identify you. Ordinary web server request logs ap
 same ninety-day rotation.</p>
 
 <h2>Children</h2>
-<p>CastMute has no accounts and collects no personal details from anyone, of any age.</p>
+<p>Neither the device nor the app has accounts, and neither collects personal details
+from anyone, of any age.</p>
 
 <h2>Changes</h2>
 <p>If any of the above changes, this page changes with it, and the date at the top moves.</p>
